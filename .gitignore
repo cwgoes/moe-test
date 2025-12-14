@@ -12,3 +12,9 @@ docs/
 
 # Dotenv file
 .env
+
+# Rust build artifacts
+masp-prover/target/
+
+# Test vectors (regenerated)
+test_vectors.json
