@@ -8,11 +8,12 @@ import './index.css'
 import App from './App.tsx'
 
 // Configure wagmi - Sepolia is the primary network
+// Using multiple RPC endpoints for better reliability
 const config = createConfig({
   chains: [sepolia, mainnet, localhost],
   connectors: [injected()],
   transports: {
-    [sepolia.id]: http('https://rpc.sepolia.org'),
+    [sepolia.id]: http('https://ethereum-sepolia-rpc.publicnode.com'),
     [mainnet.id]: http(),
     [localhost.id]: http('http://localhost:8545'),
   },

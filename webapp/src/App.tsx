@@ -30,6 +30,8 @@ interface DeploymentStatus {
   error?: string
   verifierBytecodeStatus: BytecodeStatus
   poolBytecodeStatus: BytecodeStatus
+  pollingAttempt?: number
+  lastPollingError?: string
 }
 
 function App() {
@@ -159,27 +161,38 @@ function App() {
 
     const startTime = Date.now()
     let attempts = 0
+    let lastError: string | undefined
 
     while (Date.now() - startTime < timeoutMs) {
       attempts++
-      console.log(`[Deploy] Polling for receipt (attempt ${attempts})...`)
+      setDeployment(prev => ({ ...prev, pollingAttempt: attempts, lastPollingError: lastError }))
+      console.log(`[Deploy] Polling for receipt (attempt ${attempts}), hash: ${hash}`)
 
       try {
         const receipt = await publicClient.getTransactionReceipt({ hash })
+        console.log('[Deploy] getTransactionReceipt response:', receipt)
         if (receipt) {
-          console.log('[Deploy] Receipt found:', receipt)
+          console.log('[Deploy] Receipt found:', JSON.stringify(receipt, (_, v) => typeof v === 'bigint' ? v.toString() : v))
+          setDeployment(prev => ({ ...prev, pollingAttempt: undefined, lastPollingError: undefined }))
           return receipt
+        } else {
+          lastError = 'Receipt returned null/undefined'
+          console.log('[Deploy] Receipt was null/undefined')
         }
-      } catch (err) {
-        // Receipt not found yet, this is expected
-        console.log('[Deploy] Receipt not yet available, will retry...')
+      } catch (err: unknown) {
+        // Capture the actual error
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        lastError = errorMessage
+        console.error('[Deploy] getTransactionReceipt error:', errorMessage)
+        console.error('[Deploy] Full error:', err)
+        setDeployment(prev => ({ ...prev, lastPollingError: errorMessage }))
       }
 
       // Wait before next poll
       await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
     }
 
-    throw new Error(`Transaction receipt not found after ${timeoutMs / 1000} seconds`)
+    throw new Error(`Transaction receipt not found after ${timeoutMs / 1000} seconds. Last error: ${lastError || 'none'}`)
   }
 
   const handleDeploy = async () => {
@@ -457,6 +470,18 @@ function App() {
                   >
                     {deployment.txHash.slice(0, 10)}...{deployment.txHash.slice(-8)}
                   </a>
+                </div>
+              )}
+              {deployment.pollingAttempt && (
+                <div className="deployment-polling">
+                  <span className="polling-label">Polling attempt:</span>
+                  <span className="polling-count">{deployment.pollingAttempt}</span>
+                </div>
+              )}
+              {deployment.lastPollingError && (
+                <div className="deployment-polling-error">
+                  <span className="polling-error-label">Last RPC error:</span>
+                  <code className="polling-error-message">{deployment.lastPollingError}</code>
                 </div>
               )}
             </div>

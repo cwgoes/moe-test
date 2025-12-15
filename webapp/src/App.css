@@ -797,3 +797,46 @@
   border-radius: 4px;
   font-size: 0.9rem;
 }
+
+/* Deployment Polling Status */
+.deployment-polling {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.polling-label {
+  color: #888;
+}
+
+.polling-count {
+  color: #4a9eff;
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.deployment-polling-error {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  border-radius: 6px;
+}
+
+.polling-error-label {
+  display: block;
+  color: #f56565;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+}
+
+.polling-error-message {
+  display: block;
+  color: #f56565;
+  font-size: 0.75rem;
+  font-family: monospace;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
