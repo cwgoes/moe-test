@@ -118,6 +118,7 @@ function App() {
         abi: MASP_POOL_ABI,
         bytecode: MASP_POOL_BYTECODE,
         args: [verifierAddr],
+        gas: BigInt(3_000_000), // Explicit gas limit for Sepolia
       })
       setDeployStep('waiting-pool')
     } catch (err) {
@@ -135,6 +136,7 @@ function App() {
       await deployContractAsync({
         abi: MASP_VERIFIER_ABI,
         bytecode: MASP_VERIFIER_BYTECODE,
+        gas: BigInt(5_000_000), // Explicit gas limit for Sepolia
       })
       setDeployStep('waiting-verifier')
     } catch (err) {
