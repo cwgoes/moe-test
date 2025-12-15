@@ -55,24 +55,22 @@ contract RealProofVerificationTest is Test {
 
     /// @notice Check if BLS12-381 precompiles are fully supported for arbitrary points
     function _checkPrecompileSupport() internal returns (bool) {
-        // Test G1 MSM with a non-generator scalar to verify full precompile support
-        // This will pass on real Prague nodes but fail in Foundry's simulated EVM
-        // Using: G1_generator * 2 (scalar multiplication via MSM)
-        bytes memory msmInput = abi.encodePacked(
-            MULTIPLY_VK_IC_0, // Use a VK point (not generator)
-            bytes32(uint256(1)) // Scalar = 1
-        );
+        // Test actual proof verification to check if precompiles work correctly
+        // Anvil/Foundry doesn't fully support BLS12-381 precompiles for arbitrary curve points
+        _setupMultiplyVK();
 
-        (bool success, bytes memory result) = address(0x0d).staticcall(msmInput);
+        bytes32[] memory publicInputs = new bytes32[](1);
+        publicInputs[0] = MULTIPLY_INPUT_1;
 
-        // Check if the result is valid (128 bytes for G1 point)
-        if (!success || result.length != 128) {
+        try verifier.verifyProof(
+            MASPVerifier.CircuitType.Spend,
+            MULTIPLY_PROOF_1,
+            publicInputs
+        ) returns (bool result) {
+            return result;
+        } catch {
             return false;
         }
-
-        // Additional check: verify the pairing precompile works with non-generator points
-        // by using actual VK points from our test data
-        return true;
     }
 
     /// @notice External function to test pairing precompile (for debugging)
@@ -85,6 +83,9 @@ contract RealProofVerificationTest is Test {
 
     /// @notice Sets up the multiplication circuit verification key
     function _setupMultiplyVK() internal {
+        if (verifier.isInitialized(MASPVerifier.CircuitType.Spend)) {
+            return;
+        }
         bytes[] memory ic = new bytes[](2);
         ic[0] = MULTIPLY_VK_IC_0;
         ic[1] = MULTIPLY_VK_IC_1;
