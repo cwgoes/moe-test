@@ -352,6 +352,7 @@ static SPEND_PARAMS: OnceLock<Parameters<Bls12>> = OnceLock::new();
 
 fn get_output_params() -> &'static Parameters<Bls12> {
     OUTPUT_PARAMS.get_or_init(|| {
+        web_sys::console::log_1(&"Generating output circuit parameters...".into());
         let circuit = MASPOutputCircuit {
             value: None,
             randomness: None,
@@ -360,12 +361,16 @@ fn get_output_params() -> &'static Parameters<Bls12> {
             note_commitment: None,
             epk: None,
         };
-        generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng).unwrap()
+        let params = generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng)
+            .expect("Failed to generate output circuit parameters");
+        web_sys::console::log_1(&"Output circuit parameters generated successfully".into());
+        params
     })
 }
 
 fn get_spend_params() -> &'static Parameters<Bls12> {
     SPEND_PARAMS.get_or_init(|| {
+        web_sys::console::log_1(&"Generating spend circuit parameters...".into());
         let circuit = MASPSpendCircuit {
             value: None,
             randomness: None,
@@ -376,7 +381,10 @@ fn get_spend_params() -> &'static Parameters<Bls12> {
             nullifier: None,
             rk: None,
         };
-        generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng).unwrap()
+        let params = generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng)
+            .expect("Failed to generate spend circuit parameters");
+        web_sys::console::log_1(&"Spend circuit parameters generated successfully".into());
+        params
     })
 }
 

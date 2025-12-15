@@ -25,43 +25,14 @@ export interface UnshieldRequest {
   spend_key: string;
 }
 
-interface WasmExports {
-  init: () => void;
-  init_prover: () => { success: boolean; message: string };
-  generate_shield_proof: (request: ShieldRequest) => ProofResult;
-  generate_unshield_proof: (request: UnshieldRequest) => ProofResult;
-  generate_randomness: () => string;
-  get_output_vk: () => unknown;
-  get_spend_vk: () => unknown;
-  default: (path: string) => Promise<unknown>;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type WasmModule = any;
 
-let wasmExports: WasmExports | null = null;
+let wasmModule: WasmModule | null = null;
 let initPromise: Promise<void> | null = null;
 
-async function loadWasmModule(): Promise<WasmExports> {
-  // Fetch the JS wrapper
-  const jsResponse = await fetch('/wasm/masp_wasm.js');
-  if (!jsResponse.ok) {
-    throw new Error(`Failed to fetch WASM JS wrapper: ${jsResponse.statusText}`);
-  }
-  const jsCode = await jsResponse.text();
-
-  // Create a blob URL for the module
-  const blob = new Blob([jsCode], { type: 'application/javascript' });
-  const blobUrl = URL.createObjectURL(blob);
-
-  try {
-    // Import the module from the blob URL
-    const wasm = await import(/* @vite-ignore */ blobUrl);
-    return wasm as WasmExports;
-  } finally {
-    URL.revokeObjectURL(blobUrl);
-  }
-}
-
 export async function initProver(): Promise<void> {
-  if (wasmExports) return;
+  if (wasmModule) return;
 
   if (initPromise) {
     return initPromise;
@@ -69,24 +40,42 @@ export async function initProver(): Promise<void> {
 
   initPromise = (async () => {
     try {
-      // Load the WASM module dynamically
-      const wasm = await loadWasmModule();
+      console.log('Loading MASP WASM module...');
+
+      // Dynamically import the WASM module
+      // Using @vite-ignore to bypass Vite's static analysis
+      // @ts-expect-error - dynamic import of runtime module
+      const wasm = await import(/* @vite-ignore */ '/wasm/masp_wasm.js');
+
+      console.log('WASM module loaded, initializing...');
 
       // Initialize WASM with the binary file
       await wasm.default('/wasm/masp_wasm_bg.wasm');
 
-      // Initialize panic hook
-      wasm.init();
+      console.log('WASM binary loaded, calling init...');
 
-      // Initialize the prover (generates parameters)
-      const result = wasm.init_prover();
-      if (!result.success) {
-        throw new Error('Prover initialization failed');
+      // Initialize panic hook (this is the #[wasm_bindgen(start)] function,
+      // but it may already be called automatically)
+      try {
+        wasm.init();
+      } catch {
+        // init() might throw if already called via wasm_bindgen(start)
+        console.log('init() already called');
       }
 
-      wasmExports = wasm;
+      console.log('Generating proving parameters (this may take a moment)...');
+
+      // Initialize the prover (generates parameters)
+      // This may take several seconds as it generates cryptographic parameters
+      // The wasm-bindgen wrapper throws on Rust Err results, so if we get here
+      // without an exception, initialization succeeded
+      const result = wasm.init_prover();
+      console.log('Prover init result:', JSON.stringify(result));
+
+      wasmModule = wasm;
       console.log('MASP WASM prover initialized successfully');
     } catch (error) {
+      console.error('Prover initialization error:', error);
       initPromise = null;
       throw error;
     }
@@ -96,45 +85,45 @@ export async function initProver(): Promise<void> {
 }
 
 export function isProverReady(): boolean {
-  return wasmExports !== null;
+  return wasmModule !== null;
 }
 
 export async function generateShieldProof(request: ShieldRequest): Promise<ProofResult> {
-  if (!wasmExports) {
+  if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmExports.generate_shield_proof(request);
+  return wasmModule.generate_shield_proof(request);
 }
 
 export async function generateUnshieldProof(request: UnshieldRequest): Promise<ProofResult> {
-  if (!wasmExports) {
+  if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmExports.generate_unshield_proof(request);
+  return wasmModule.generate_unshield_proof(request);
 }
 
 export function generateRandomness(): string {
-  if (!wasmExports) {
+  if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmExports.generate_randomness();
+  return wasmModule.generate_randomness();
 }
 
 export function getOutputVK(): unknown {
-  if (!wasmExports) {
+  if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmExports.get_output_vk();
+  return wasmModule.get_output_vk();
 }
 
 export function getSpendVK(): unknown {
-  if (!wasmExports) {
+  if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmExports.get_spend_vk();
+  return wasmModule.get_spend_vk();
 }
