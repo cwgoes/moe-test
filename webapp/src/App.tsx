@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAccount, useConnect, useDisconnect, useChainId, useReadContract, usePublicClient, useWalletClient, useSwitchChain } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import { formatUnits } from 'viem'
 import { ShieldForm } from './components/ShieldForm'
 import { UnshieldForm } from './components/UnshieldForm'
 import { ProverStatus } from './components/ProverStatus'
+import { WethActions } from './components/WethActions'
 import { initProver } from './lib/prover'
 import {
   ERC20_ABI,
@@ -61,13 +62,18 @@ function App() {
   const defaultToken = getDefaultTokenAddress(chainId)
 
   // Read token balance
-  const { data: tokenBalance } = useReadContract({
+  const { data: tokenBalance, refetch: refetchTokenBalance } = useReadContract({
     address: defaultToken,
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   })
+
+  // Callback to refresh all balances
+  const refreshBalances = useCallback(() => {
+    refetchTokenBalance()
+  }, [refetchTokenBalance])
 
   const { data: tokenSymbol } = useReadContract({
     address: defaultToken,
@@ -548,8 +554,9 @@ function App() {
           </div>
         ) : (
           <>
-            {activeTab === 'shield' && <ShieldForm defaultToken={defaultToken} poolAddress={poolAddress} />}
-            {activeTab === 'unshield' && <UnshieldForm defaultToken={defaultToken} poolAddress={poolAddress} />}
+            <WethActions onSuccess={refreshBalances} />
+            {activeTab === 'shield' && <ShieldForm defaultToken={defaultToken} poolAddress={poolAddress} onSuccess={refreshBalances} />}
+            {activeTab === 'unshield' && <UnshieldForm defaultToken={defaultToken} poolAddress={poolAddress} onSuccess={refreshBalances} />}
           </>
         )}
       </main>

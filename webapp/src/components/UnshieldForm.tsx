@@ -7,9 +7,10 @@ import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 interface UnshieldFormProps {
   defaultToken: `0x${string}`;
   poolAddress?: `0x${string}`;
+  onSuccess?: () => void;
 }
 
-export function UnshieldForm({ defaultToken, poolAddress }: UnshieldFormProps) {
+export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldFormProps) {
   const { address } = useAccount();
   const { writeContractAsync, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
@@ -32,6 +33,13 @@ export function UnshieldForm({ defaultToken, poolAddress }: UnshieldFormProps) {
   useEffect(() => {
     setTokenAddress(defaultToken);
   }, [defaultToken]);
+
+  // Call onSuccess when transaction is confirmed
+  useEffect(() => {
+    if (isSuccess) {
+      onSuccess?.();
+    }
+  }, [isSuccess, onSuccess]);
 
   // Timer effect for proof generation
   useEffect(() => {

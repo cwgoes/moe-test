@@ -7,6 +7,7 @@ import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 interface ShieldFormProps {
   defaultToken: `0x${string}`;
   poolAddress?: `0x${string}`;
+  onSuccess?: () => void;
 }
 
 type SimulationStatus = 'idle' | 'simulating' | 'success' | 'error';
@@ -17,7 +18,7 @@ interface ValidationResult {
   warnings: string[];
 }
 
-export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
+export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormProps) {
   const { address } = useAccount();
   const { writeContractAsync, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
@@ -44,6 +45,13 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
   useEffect(() => {
     setTokenAddress(defaultToken);
   }, [defaultToken]);
+
+  // Call onSuccess when transaction is confirmed
+  useEffect(() => {
+    if (isSuccess) {
+      onSuccess?.();
+    }
+  }, [isSuccess, onSuccess]);
 
   // Timer effect for proof generation
   useEffect(() => {
