@@ -1,3 +1,3 @@
 target/
-*.json
-!test_vectors.json
+TestVectors.sol
+test_vectors.json
