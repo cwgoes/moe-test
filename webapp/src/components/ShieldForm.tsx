@@ -366,7 +366,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
   };
 
   const needsApproval = (() => {
-    if (!amount || !allowance) return false;
+    if (!amount || allowance === undefined) return false;
     try {
       const amountBigInt = parseUnits(amount, decimals);
       return allowance < amountBigInt;
