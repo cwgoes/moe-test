@@ -13,10 +13,4 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['masp-wasm'],
   },
-  build: {
-    rollupOptions: {
-      // Externalize the WASM module since we load it at runtime
-      external: ['/wasm/masp_wasm.js'],
-    },
-  },
 })
