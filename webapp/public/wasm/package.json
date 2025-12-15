@@ -1,0 +1,16 @@
+{
+  "name": "masp-wasm",
+  "type": "module",
+  "description": "MASP proof generation for web browsers",
+  "version": "0.1.0",
+  "files": [
+    "masp_wasm_bg.wasm",
+    "masp_wasm.js",
+    "masp_wasm.d.ts"
+  ],
+  "main": "masp_wasm.js",
+  "types": "masp_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

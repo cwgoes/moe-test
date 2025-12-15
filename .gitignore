@@ -2,6 +2,13 @@
 cache/
 out/
 
+# Rust build artifacts
+masp-wasm/target/
+
+# Node.js
+webapp/node_modules/
+webapp/dist/
+
 # Ignores development broadcast logs
 !/broadcast
 /broadcast/*/31337/
