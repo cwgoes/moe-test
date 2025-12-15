@@ -206,7 +206,7 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
       return 'Token transfer failed. Check your balance and approval.';
     }
     if (errorStr.includes('Invalid public inputs')) {
-      return 'Invalid public inputs. Expected 3 inputs: [valueCommitment, noteCommitment, epk].';
+      return 'Invalid public inputs. Expected 2 inputs: [valueCommitment, noteCommitment].';
     }
     if (errorStr.includes('ERC20: transfer amount exceeds balance')) {
       return 'Insufficient token balance for this transfer.';
@@ -292,8 +292,8 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
       }
 
       // Validate public inputs count
-      if (proofResult.public_inputs.length !== 3) {
-        throw new Error(`Expected 3 public inputs, got ${proofResult.public_inputs.length}. The shield circuit requires [valueCommitment, noteCommitment, epk].`);
+      if (proofResult.public_inputs.length !== 2) {
+        throw new Error(`Expected 2 public inputs, got ${proofResult.public_inputs.length}. The shield circuit requires [valueCommitment, noteCommitment].`);
       }
 
       setProofGenerated(true);

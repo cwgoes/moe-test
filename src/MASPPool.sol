@@ -102,14 +102,14 @@ contract MASPPool {
     /// @param token The ERC20 token address
     /// @param amount The amount to deposit
     /// @param proof The Groth16 proof for the Output circuit
-    /// @param publicInputs The public inputs [valueCommitment, noteCommitment, epk]
+    /// @param publicInputs The public inputs [valueCommitment, noteCommitment]
     function shield(
         address token,
         uint256 amount,
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external {
-        require(publicInputs.length == 3, "Invalid public inputs");
+        require(publicInputs.length == 2, "Invalid public inputs");
 
         bytes32 noteCommitment = publicInputs[1];
 
@@ -142,12 +142,12 @@ contract MASPPool {
 
     /// @notice Shield ETH into the pool
     /// @param proof The Groth16 proof for the Output circuit
-    /// @param publicInputs The public inputs [valueCommitment, noteCommitment, epk]
+    /// @param publicInputs The public inputs [valueCommitment, noteCommitment]
     function shieldETH(
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external payable {
-        require(publicInputs.length == 3, "Invalid public inputs");
+        require(publicInputs.length == 2, "Invalid public inputs");
         require(msg.value > 0, "Must send ETH");
 
         bytes32 noteCommitment = publicInputs[1];
