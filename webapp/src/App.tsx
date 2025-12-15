@@ -46,7 +46,8 @@ function App() {
   // Deploy contract hooks
   const { deployContractAsync } = useDeployContract()
   const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>()
-  const { data: deployReceipt } = useWaitForTransactionReceipt({
+  const [lastProcessedHash, setLastProcessedHash] = useState<string | undefined>()
+  const { data: deployReceipt, isSuccess: isDeploySuccess } = useWaitForTransactionReceipt({
     hash: pendingTxHash,
   })
 
@@ -94,25 +95,37 @@ function App() {
     setPoolAddress(storedPool)
   }, [chainId])
 
-  // Handle deploy receipt
+  // Handle deploy receipt - use isDeploySuccess and track processed hashes
   useEffect(() => {
-    if (deployReceipt && deployReceipt.contractAddress) {
+    // Only process if we have success, a contract address, a pending hash, and haven't processed this hash yet
+    if (
+      isDeploySuccess &&
+      deployReceipt?.contractAddress &&
+      pendingTxHash &&
+      pendingTxHash !== lastProcessedHash
+    ) {
       const contractAddress = deployReceipt.contractAddress
+      const currentHash = pendingTxHash
+
+      // Mark this hash as processed immediately to prevent duplicate processing
+      setLastProcessedHash(currentHash)
 
       if (deployStep === 'waiting-verifier') {
+        console.log('[Deploy] Verifier deployed at:', contractAddress)
         setVerifierAddress(contractAddress)
         saveDeployedContracts(chainId, { verifier: contractAddress })
         // Clear pending tx and continue to deploy pool
         setPendingTxHash(undefined)
         deployPool(contractAddress)
       } else if (deployStep === 'waiting-pool') {
+        console.log('[Deploy] Pool deployed at:', contractAddress)
         setPoolAddress(contractAddress)
         saveDeployedContracts(chainId, { pool: contractAddress })
         setPendingTxHash(undefined)
         setDeployStep('done')
       }
     }
-  }, [deployReceipt, deployStep, chainId])
+  }, [isDeploySuccess, deployReceipt, deployStep, chainId, pendingTxHash, lastProcessedHash])
 
   const deployPool = async (verifierAddr: `0x${string}`) => {
     setDeployStep('deploying-pool')
@@ -133,6 +146,7 @@ function App() {
 
   const handleDeploy = async () => {
     setDeployError(null)
+    setLastProcessedHash(undefined) // Reset processed hash for new deployment
 
     // Check if verifier is already deployed
     const existingVerifier = getMaspVerifierAddress(chainId)

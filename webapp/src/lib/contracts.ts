@@ -219,6 +219,7 @@ export function getMaspPoolAddress(chainId: number): `0x${string}` | undefined {
 
   // Fall back to defaults
   const defaults: Record<number, `0x${string}`> = {
+    11155111: '0x9dc72ccba2002a2039cfef7f609794a9ae8fcbe5', // Sepolia deployed pool
     31337: '0x5FbDB2315678afecb367f032d93F642f64180aa3', // Localhost
   };
 
