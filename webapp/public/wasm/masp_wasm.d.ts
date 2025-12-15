@@ -1,47 +1,29 @@
 /* tslint:disable */
 /* eslint-disable */
 
-/**
- * Generate random bytes for use as randomness
- */
 export function generate_randomness(): string;
 
-/**
- * Generate a shield proof (Output circuit)
- */
 export function generate_shield_proof(request_js: any): any;
 
-/**
- * Generate an unshield proof (Spend circuit)
- */
 export function generate_unshield_proof(request_js: any): any;
 
 /**
- * Get the verification key for the Output circuit (for contract setup)
+ * Get information about the MASP implementation
  */
-export function get_output_vk(): any;
-
-/**
- * Get the verification key for the Spend circuit (for contract setup)
- */
-export function get_spend_vk(): any;
+export function get_masp_info(): any;
 
 export function init(): void;
 
-/**
- * Initialize the prover (generates parameters)
- */
 export function init_prover(): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly generate_randomness: () => [number, number, number, number];
+  readonly generate_randomness: () => [number, number];
   readonly generate_shield_proof: (a: any) => [number, number, number];
   readonly generate_unshield_proof: (a: any) => [number, number, number];
-  readonly get_output_vk: () => [number, number, number];
-  readonly get_spend_vk: () => [number, number, number];
+  readonly get_masp_info: () => [number, number, number];
   readonly init: () => void;
   readonly init_prover: () => [number, number, number];
   readonly __wbindgen_malloc: (a: number, b: number) => number;

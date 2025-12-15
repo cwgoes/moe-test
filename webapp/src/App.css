@@ -342,6 +342,75 @@
   text-align: center;
 }
 
+/* Proof Progress Animation */
+.proof-progress {
+  background: rgba(74, 158, 255, 0.1);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin: 1rem 0;
+  text-align: center;
+}
+
+.proof-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(74, 158, 255, 0.2);
+  border-top-color: #4a9eff;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.proof-progress-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.proof-progress-text span:first-child {
+  color: #ccc;
+}
+
+.proof-timer {
+  font-family: monospace;
+  color: #4a9eff;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.proof-progress-bar {
+  height: 4px;
+  background: rgba(74, 158, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.proof-progress-bar-inner {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff, #8b5cf6, #4a9eff);
+  background-size: 200% 100%;
+  animation: progress-flow 1.5s linear infinite;
+  width: 100%;
+}
+
+@keyframes progress-flow {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 /* Info Box */
 .info-box {
   background: #0a0a0a;

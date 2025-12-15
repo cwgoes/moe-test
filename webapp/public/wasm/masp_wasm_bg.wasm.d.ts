@@ -1,11 +1,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const generate_randomness: () => [number, number, number, number];
+export const generate_randomness: () => [number, number];
 export const generate_shield_proof: (a: any) => [number, number, number];
 export const generate_unshield_proof: (a: any) => [number, number, number];
-export const get_output_vk: () => [number, number, number];
-export const get_spend_vk: () => [number, number, number];
+export const get_masp_info: () => [number, number, number];
 export const init: () => void;
 export const init_prover: () => [number, number, number];
 export const __wbindgen_malloc: (a: number, b: number) => number;

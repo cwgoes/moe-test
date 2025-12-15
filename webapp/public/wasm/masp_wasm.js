@@ -183,30 +183,22 @@ if (!('encodeInto' in cachedTextEncoder)) {
 let WASM_VECTOR_LEN = 0;
 
 /**
- * Generate random bytes for use as randomness
  * @returns {string}
  */
 export function generate_randomness() {
-    let deferred2_0;
-    let deferred2_1;
+    let deferred1_0;
+    let deferred1_1;
     try {
         const ret = wasm.generate_randomness();
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
     } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
     }
 }
 
 /**
- * Generate a shield proof (Output circuit)
  * @param {any} request_js
  * @returns {any}
  */
@@ -219,7 +211,6 @@ export function generate_shield_proof(request_js) {
 }
 
 /**
- * Generate an unshield proof (Spend circuit)
  * @param {any} request_js
  * @returns {any}
  */
@@ -232,23 +223,11 @@ export function generate_unshield_proof(request_js) {
 }
 
 /**
- * Get the verification key for the Output circuit (for contract setup)
+ * Get information about the MASP implementation
  * @returns {any}
  */
-export function get_output_vk() {
-    const ret = wasm.get_output_vk();
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Get the verification key for the Spend circuit (for contract setup)
- * @returns {any}
- */
-export function get_spend_vk() {
-    const ret = wasm.get_spend_vk();
+export function get_masp_info() {
+    const ret = wasm.get_masp_info();
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -260,7 +239,6 @@ export function init() {
 }
 
 /**
- * Initialize the prover (generates parameters)
  * @returns {any}
  */
 export function init_prover() {
@@ -494,6 +472,10 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbg_node_905d3e251edff8a2 = function(arg0) {
         const ret = arg0.node;
+        return ret;
+    };
+    imports.wbg.__wbg_now_69d776cd24f5215b = function() {
+        const ret = Date.now();
         return ret;
     };
     imports.wbg.__wbg_process_dc0fbacc7c1c06f7 = function(arg0) {

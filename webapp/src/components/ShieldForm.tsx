@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAccount, useChainId, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits, formatUnits, isAddress } from 'viem';
 import { generateShieldProof, generateRandomness } from '../lib/prover';
@@ -16,8 +16,31 @@ export function ShieldForm() {
   const [isGeneratingProof, setIsGeneratingProof] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proofGenerated, setProofGenerated] = useState(false);
+  const [proofTime, setProofTime] = useState<number | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const maspPoolAddress = getMaspPoolAddress(chainId);
+
+  // Timer effect for proof generation
+  useEffect(() => {
+    if (isGeneratingProof) {
+      const startTime = Date.now();
+      timerRef.current = setInterval(() => {
+        setElapsedTime(Date.now() - startTime);
+      }, 50);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [isGeneratingProof]);
 
   // Read token info
   const { data: tokenDecimals } = useReadContract({
@@ -75,10 +98,16 @@ export function ShieldForm() {
     setError(null);
     setIsGeneratingProof(true);
     setProofGenerated(false);
+    setProofTime(null);
+    setElapsedTime(0);
+
+    const startTime = Date.now();
 
     try {
       const amountBigInt = parseUnits(amount, decimals);
       const randomness = generateRandomness();
+
+      console.log('[UI] Starting proof generation...');
 
       // Generate the shield proof
       const proofResult = await generateShieldProof({
@@ -87,6 +116,10 @@ export function ShieldForm() {
         recipient_pk: recipientPk,
         randomness: randomness,
       });
+
+      const elapsed = Date.now() - startTime;
+      setProofTime(elapsed);
+      console.log(`[UI] Proof generation completed in ${elapsed}ms`);
 
       if (!proofResult.success) {
         throw new Error(proofResult.error || 'Proof generation failed');
@@ -129,6 +162,11 @@ export function ShieldForm() {
   })();
 
   const canShield = !needsApproval && isAddress(tokenAddress) && amount && recipientPk && !isPending && !isGeneratingProof;
+
+  const formatTime = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
 
   return (
     <div className="form-container">
@@ -186,6 +224,19 @@ export function ShieldForm() {
         </div>
       )}
 
+      {isGeneratingProof && (
+        <div className="proof-progress">
+          <div className="proof-spinner"></div>
+          <div className="proof-progress-text">
+            <span>Generating zk-SNARK proof...</span>
+            <span className="proof-timer">{formatTime(elapsedTime)}</span>
+          </div>
+          <div className="proof-progress-bar">
+            <div className="proof-progress-bar-inner"></div>
+          </div>
+        </div>
+      )}
+
       <div className="button-group">
         {needsApproval ? (
           <button
@@ -212,8 +263,10 @@ export function ShieldForm() {
         )}
       </div>
 
-      {proofGenerated && (
-        <div className="proof-status">Proof generated successfully</div>
+      {proofGenerated && proofTime !== null && (
+        <div className="proof-status">
+          Proof generated in {formatTime(proofTime)} (BLS12-381 Groth16, ~512 bytes)
+        </div>
       )}
 
       {!maspPoolAddress && (
