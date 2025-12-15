@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
-import { useAccount, useChainId, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits, formatUnits, isAddress } from 'viem';
 import { generateShieldProof, generateRandomness } from '../lib/prover';
-import { MASP_POOL_ABI, ERC20_ABI, getMaspPoolAddress } from '../lib/contracts';
+import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 
-export function ShieldForm() {
+interface ShieldFormProps {
+  defaultToken: `0x${string}`;
+  poolAddress?: `0x${string}`;
+}
+
+export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
   const { address } = useAccount();
-  const chainId = useChainId();
   const { writeContractAsync, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
 
-  const [tokenAddress, setTokenAddress] = useState('');
+  const [tokenAddress, setTokenAddress] = useState<string>(defaultToken);
   const [amount, setAmount] = useState('');
   const [recipientPk, setRecipientPk] = useState('');
   const [isGeneratingProof, setIsGeneratingProof] = useState(false);
@@ -20,7 +24,12 @@ export function ShieldForm() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const maspPoolAddress = getMaspPoolAddress(chainId);
+  const maspPoolAddress = poolAddress;
+
+  // Update token address when defaultToken changes
+  useEffect(() => {
+    setTokenAddress(defaultToken);
+  }, [defaultToken]);
 
   // Timer effect for proof generation
   useEffect(() => {
@@ -271,7 +280,7 @@ export function ShieldForm() {
 
       {!maspPoolAddress && (
         <div className="warning-message">
-          MASP Pool contract not deployed on this network (Chain ID: {chainId})
+          MASP Pool contract not deployed on this network. Please deploy contracts first.
         </div>
       )}
     </div>

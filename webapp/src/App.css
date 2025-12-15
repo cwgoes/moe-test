@@ -445,3 +445,140 @@
   font-size: 0.85rem;
   margin: 0;
 }
+
+/* Token Balance */
+.token-balance {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(74, 158, 255, 0.1);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.balance-label {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.balance-value {
+  font-family: monospace;
+  color: #4a9eff;
+  font-weight: bold;
+}
+
+.token-address {
+  color: #666;
+  font-size: 0.8rem;
+  font-family: monospace;
+}
+
+/* Contract Section */
+.contract-section {
+  background: #1a1a1a;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.contract-section h3 {
+  margin: 0 0 1rem;
+  color: #fff;
+  font-size: 1.1rem;
+}
+
+.contract-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.contract-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.contract-label {
+  color: #888;
+  min-width: 80px;
+}
+
+.contract-address {
+  font-family: monospace;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.contract-address.deployed {
+  background: rgba(72, 187, 120, 0.1);
+  color: #48bb78;
+}
+
+.contract-address.not-deployed {
+  background: rgba(245, 101, 101, 0.1);
+  color: #f56565;
+}
+
+/* Deploy Section */
+.deploy-section {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #333;
+}
+
+.deploy-btn {
+  background: linear-gradient(135deg, #4a9eff, #8b5cf6);
+  color: white;
+  border: none;
+  padding: 0.875rem 1.5rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+  font-weight: 500;
+}
+
+.deploy-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.deploy-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.deploy-error {
+  background: rgba(245, 101, 101, 0.1);
+  color: #f56565;
+  padding: 0.75rem;
+  border-radius: 8px;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.deploy-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.deploy-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(74, 158, 255, 0.2);
+  border-top-color: #4a9eff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}

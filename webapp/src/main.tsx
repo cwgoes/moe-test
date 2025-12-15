@@ -7,13 +7,13 @@ import { injected } from 'wagmi/connectors'
 import './index.css'
 import App from './App.tsx'
 
-// Configure wagmi
+// Configure wagmi - Sepolia is the primary network
 const config = createConfig({
-  chains: [mainnet, sepolia, localhost],
+  chains: [sepolia, mainnet, localhost],
   connectors: [injected()],
   transports: {
+    [sepolia.id]: http('https://rpc.sepolia.org'),
     [mainnet.id]: http(),
-    [sepolia.id]: http(),
     [localhost.id]: http('http://localhost:8545'),
   },
 })

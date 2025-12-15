@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
-import { useAccount, useChainId, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits, isAddress } from 'viem';
 import { generateUnshieldProof } from '../lib/prover';
-import { MASP_POOL_ABI, ERC20_ABI, getMaspPoolAddress } from '../lib/contracts';
+import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 
-export function UnshieldForm() {
+interface UnshieldFormProps {
+  defaultToken: `0x${string}`;
+  poolAddress?: `0x${string}`;
+}
+
+export function UnshieldForm({ defaultToken, poolAddress }: UnshieldFormProps) {
   const { address } = useAccount();
-  const chainId = useChainId();
   const { writeContractAsync, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
 
-  const [tokenAddress, setTokenAddress] = useState('');
+  const [tokenAddress, setTokenAddress] = useState<string>(defaultToken);
   const [amount, setAmount] = useState('');
   const [recipient, setRecipient] = useState('');
   const [spendKey, setSpendKey] = useState('');
@@ -22,7 +26,12 @@ export function UnshieldForm() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const maspPoolAddress = getMaspPoolAddress(chainId);
+  const maspPoolAddress = poolAddress;
+
+  // Update token address when defaultToken changes
+  useEffect(() => {
+    setTokenAddress(defaultToken);
+  }, [defaultToken]);
 
   // Timer effect for proof generation
   useEffect(() => {
@@ -282,7 +291,7 @@ export function UnshieldForm() {
 
       {!maspPoolAddress && (
         <div className="warning-message">
-          MASP Pool contract not deployed on this network (Chain ID: {chainId})
+          MASP Pool contract not deployed on this network. Please deploy contracts first.
         </div>
       )}
     </div>
