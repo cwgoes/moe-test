@@ -225,10 +225,20 @@ export function getMaspPoolAddress(chainId: number): `0x${string}` | undefined {
   return defaults[chainId];
 }
 
-// Get MASP Verifier address (from localStorage)
+// Get MASP Verifier address (from localStorage or defaults)
 export function getMaspVerifierAddress(chainId: number): `0x${string}` | undefined {
+  // First check localStorage for deployed contract
   const deployed = getDeployedContracts(chainId);
-  return deployed.verifier;
+  if (deployed.verifier && deployed.verifier !== '0x0000000000000000000000000000000000000000') {
+    return deployed.verifier;
+  }
+
+  // Fall back to defaults
+  const defaults: Record<number, `0x${string}`> = {
+    11155111: '0xcf58e5e793716ca0eeb9cd6a9045929e0489c009', // Sepolia deployed verifier
+  };
+
+  return defaults[chainId];
 }
 
 // Get default token address for a chain

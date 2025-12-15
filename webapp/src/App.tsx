@@ -44,9 +44,10 @@ function App() {
   const defaultToken = getDefaultTokenAddress(chainId)
 
   // Deploy contract hooks
-  const { deployContractAsync, data: deployTxHash } = useDeployContract()
+  const { deployContractAsync } = useDeployContract()
+  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>()
   const { data: deployReceipt } = useWaitForTransactionReceipt({
-    hash: deployTxHash,
+    hash: pendingTxHash,
   })
 
   // Read token balance
@@ -101,25 +102,28 @@ function App() {
       if (deployStep === 'waiting-verifier') {
         setVerifierAddress(contractAddress)
         saveDeployedContracts(chainId, { verifier: contractAddress })
-        // Continue to deploy pool
+        // Clear pending tx and continue to deploy pool
+        setPendingTxHash(undefined)
         deployPool(contractAddress)
       } else if (deployStep === 'waiting-pool') {
         setPoolAddress(contractAddress)
         saveDeployedContracts(chainId, { pool: contractAddress })
+        setPendingTxHash(undefined)
         setDeployStep('done')
       }
     }
-  }, [deployReceipt])
+  }, [deployReceipt, deployStep, chainId])
 
   const deployPool = async (verifierAddr: `0x${string}`) => {
     setDeployStep('deploying-pool')
     try {
-      await deployContractAsync({
+      const hash = await deployContractAsync({
         abi: MASP_POOL_ABI,
         bytecode: MASP_POOL_BYTECODE,
         args: [verifierAddr],
         gas: BigInt(8_000_000), // Explicit gas limit for Sepolia
       })
+      setPendingTxHash(hash)
       setDeployStep('waiting-pool')
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : 'Failed to deploy pool')
@@ -129,15 +133,25 @@ function App() {
 
   const handleDeploy = async () => {
     setDeployError(null)
+
+    // Check if verifier is already deployed
+    const existingVerifier = getMaspVerifierAddress(chainId)
+    if (existingVerifier) {
+      // Skip verifier deployment, go straight to pool
+      deployPool(existingVerifier)
+      return
+    }
+
     setDeployStep('deploying-verifier')
 
     try {
       // First deploy the verifier
-      await deployContractAsync({
+      const hash = await deployContractAsync({
         abi: MASP_VERIFIER_ABI,
         bytecode: MASP_VERIFIER_BYTECODE,
         gas: BigInt(12_000_000), // Explicit gas limit for Sepolia
       })
+      setPendingTxHash(hash)
       setDeployStep('waiting-verifier')
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : 'Failed to deploy verifier')
@@ -161,7 +175,8 @@ function App() {
       case 'done':
         return 'Contracts Deployed!'
       default:
-        return 'Deploy MASP Contracts'
+        // If verifier exists but not pool, show different text
+        return verifierAddress && !poolAddress ? 'Deploy MASP Pool' : 'Deploy MASP Contracts'
     }
   }
 
