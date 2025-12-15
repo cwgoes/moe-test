@@ -614,3 +614,86 @@
   animation: spin 1s linear infinite;
   flex-shrink: 0;
 }
+
+/* Simulation Status */
+.simulation-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.simulation-status.simulating {
+  background: rgba(74, 158, 255, 0.1);
+  color: #4a9eff;
+}
+
+.simulation-status.success {
+  background: rgba(72, 187, 120, 0.1);
+  color: #48bb78;
+}
+
+.simulation-status.error {
+  background: rgba(245, 101, 101, 0.1);
+  color: #f56565;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.simulation-status.error strong {
+  margin-bottom: 0.25rem;
+}
+
+.simulation-status.error p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.simulation-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(74, 158, 255, 0.2);
+  border-top-color: #4a9eff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Validation Errors */
+.validation-errors {
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  color: #f56565;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.validation-errors strong {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.validation-errors ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.validation-errors li {
+  margin-bottom: 0.25rem;
+}
+
+.validation-errors li:last-child {
+  margin-bottom: 0;
+}
+
+/* Input Error State */
+.form-group input.input-error {
+  border-color: #f56565;
+  background: rgba(245, 101, 101, 0.05);
+}
