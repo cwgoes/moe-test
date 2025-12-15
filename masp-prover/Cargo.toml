@@ -5,6 +5,10 @@ edition = "2021"
 description = "Groth16 proof generator for Ethereum MASP verifier testing"
 
 [dependencies]
+# MASP library from Namada
+masp_primitives = "1.1"
+masp_proofs = "1.1"
+
 # Groth16 proving system with BLS12-381
 bellman = "0.14"
 bls12_381 = "0.8"
@@ -20,6 +24,9 @@ serde_json = "1.0"
 rand = "0.8"
 rand_core = "0.6"
 
+# Additional utilities
+bitvec = "1"
+
 [[bin]]
 name = "generate-test-vectors"
 path = "src/generate_test_vectors.rs"
@@ -27,3 +34,7 @@ path = "src/generate_test_vectors.rs"
 [[bin]]
 name = "verify-format"
 path = "src/verify_format.rs"
+
+[[bin]]
+name = "generate-masp-proofs"
+path = "src/generate_masp_proofs.rs"
