@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useAccount, useConnect, useDisconnect, useChainId, useReadContract, useDeployContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
+import { useAccount, useConnect, useDisconnect, useChainId, useReadContract, usePublicClient, useWalletClient, useSwitchChain } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import { formatUnits } from 'viem'
 import { ShieldForm } from './components/ShieldForm'
@@ -21,36 +21,42 @@ import {
 import './App.css'
 
 type TabType = 'shield' | 'unshield'
-type DeployStep = 'idle' | 'deploying-verifier' | 'waiting-verifier' | 'deploying-pool' | 'waiting-pool' | 'done'
+type DeployStep = 'idle' | 'deploying-verifier' | 'waiting-verifier' | 'deploying-pool' | 'waiting-pool' | 'verifying' | 'done'
+type BytecodeStatus = 'unknown' | 'checking' | 'valid' | 'invalid' | 'error'
+
+interface DeploymentStatus {
+  step: DeployStep
+  txHash?: `0x${string}`
+  error?: string
+  verifierBytecodeStatus: BytecodeStatus
+  poolBytecodeStatus: BytecodeStatus
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('shield')
   const [proverReady, setProverReady] = useState(false)
   const [proverError, setProverError] = useState<string | null>(null)
-  const [deployStep, setDeployStep] = useState<DeployStep>('idle')
-  const [deployError, setDeployError] = useState<string | null>(null)
   const [verifierAddress, setVerifierAddress] = useState<`0x${string}` | undefined>()
   const [poolAddress, setPoolAddress] = useState<`0x${string}` | undefined>()
+  const [deployment, setDeployment] = useState<DeploymentStatus>({
+    step: 'idle',
+    verifierBytecodeStatus: 'unknown',
+    poolBytecodeStatus: 'unknown',
+  })
 
   const { address, isConnected } = useAccount()
   const { connect, connectors } = useConnect()
   const { disconnect } = useDisconnect()
   const chainId = useChainId()
   const { switchChain, isPending: isSwitchingChain } = useSwitchChain()
+  const publicClient = usePublicClient()
+  const { data: walletClient } = useWalletClient()
 
   // Check if we're on Sepolia
   const isOnSepolia = chainId === sepolia.id
 
   // Get default token address for the current chain
   const defaultToken = getDefaultTokenAddress(chainId)
-
-  // Deploy contract hooks
-  const { deployContractAsync } = useDeployContract()
-  const [pendingTxHash, setPendingTxHash] = useState<`0x${string}` | undefined>()
-  const [lastProcessedHash, setLastProcessedHash] = useState<string | undefined>()
-  const { data: deployReceipt, isSuccess: isDeploySuccess } = useWaitForTransactionReceipt({
-    hash: pendingTxHash,
-  })
 
   // Read token balance
   const { data: tokenBalance } = useReadContract({
@@ -94,99 +100,176 @@ function App() {
     const storedPool = getMaspPoolAddress(chainId)
     setVerifierAddress(storedVerifier)
     setPoolAddress(storedPool)
+
+    // Reset bytecode status when chain changes
+    setDeployment(prev => ({
+      ...prev,
+      verifierBytecodeStatus: storedVerifier ? 'unknown' : 'unknown',
+      poolBytecodeStatus: storedPool ? 'unknown' : 'unknown',
+    }))
   }, [chainId])
 
-  // Handle deploy receipt - use isDeploySuccess and track processed hashes
+  // Verify bytecode when addresses are set
   useEffect(() => {
-    // Only process if we have success, a contract address, a pending hash, and haven't processed this hash yet
-    if (
-      isDeploySuccess &&
-      deployReceipt?.contractAddress &&
-      pendingTxHash &&
-      pendingTxHash !== lastProcessedHash
-    ) {
-      const contractAddress = deployReceipt.contractAddress
-      const currentHash = pendingTxHash
+    const verifyBytecode = async () => {
+      if (!publicClient) return
 
-      // Mark this hash as processed immediately to prevent duplicate processing
-      setLastProcessedHash(currentHash)
+      // Verify verifier bytecode
+      if (verifierAddress && deployment.verifierBytecodeStatus === 'unknown') {
+        setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'checking' }))
+        try {
+          const code = await publicClient.getCode({ address: verifierAddress })
+          // Check if code exists (deployed contract has code)
+          if (code && code !== '0x' && code.length > 10) {
+            setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'valid' }))
+          } else {
+            setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'invalid' }))
+          }
+        } catch {
+          setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'error' }))
+        }
+      }
 
-      if (deployStep === 'waiting-verifier') {
-        console.log('[Deploy] Verifier deployed at:', contractAddress)
-        setVerifierAddress(contractAddress)
-        saveDeployedContracts(chainId, { verifier: contractAddress })
-        // Clear pending tx and continue to deploy pool
-        setPendingTxHash(undefined)
-        deployPool(contractAddress)
-      } else if (deployStep === 'waiting-pool') {
-        console.log('[Deploy] Pool deployed at:', contractAddress)
-        setPoolAddress(contractAddress)
-        saveDeployedContracts(chainId, { pool: contractAddress })
-        setPendingTxHash(undefined)
-        setDeployStep('done')
+      // Verify pool bytecode
+      if (poolAddress && deployment.poolBytecodeStatus === 'unknown') {
+        setDeployment(prev => ({ ...prev, poolBytecodeStatus: 'checking' }))
+        try {
+          const code = await publicClient.getCode({ address: poolAddress })
+          if (code && code !== '0x' && code.length > 10) {
+            setDeployment(prev => ({ ...prev, poolBytecodeStatus: 'valid' }))
+          } else {
+            setDeployment(prev => ({ ...prev, poolBytecodeStatus: 'invalid' }))
+          }
+        } catch {
+          setDeployment(prev => ({ ...prev, poolBytecodeStatus: 'error' }))
+        }
       }
     }
-  }, [isDeploySuccess, deployReceipt, deployStep, chainId, pendingTxHash, lastProcessedHash])
 
-  const deployPool = async (verifierAddr: `0x${string}`) => {
-    setDeployStep('deploying-pool')
-    try {
-      const hash = await deployContractAsync({
-        abi: MASP_POOL_ABI,
-        bytecode: MASP_POOL_BYTECODE,
-        args: [verifierAddr],
-        gas: BigInt(8_000_000), // Explicit gas limit for Sepolia
-      })
-      setPendingTxHash(hash)
-      setDeployStep('waiting-pool')
-    } catch (err) {
-      setDeployError(err instanceof Error ? err.message : 'Failed to deploy pool')
-      setDeployStep('idle')
-    }
-  }
+    verifyBytecode()
+  }, [verifierAddress, poolAddress, publicClient, deployment.verifierBytecodeStatus, deployment.poolBytecodeStatus])
 
   const handleDeploy = async () => {
-    setDeployError(null)
-    setLastProcessedHash(undefined) // Reset processed hash for new deployment
-
-    // Check if verifier is already deployed
-    const existingVerifier = getMaspVerifierAddress(chainId)
-    if (existingVerifier) {
-      // Skip verifier deployment, go straight to pool
-      deployPool(existingVerifier)
+    if (!walletClient || !publicClient) {
+      setDeployment(prev => ({ ...prev, error: 'Wallet not connected' }))
       return
     }
 
-    setDeployStep('deploying-verifier')
+    setDeployment({
+      step: 'idle',
+      verifierBytecodeStatus: 'unknown',
+      poolBytecodeStatus: 'unknown',
+      error: undefined,
+      txHash: undefined,
+    })
 
     try {
-      // First deploy the verifier
-      const hash = await deployContractAsync({
-        abi: MASP_VERIFIER_ABI,
-        bytecode: MASP_VERIFIER_BYTECODE,
-        gas: BigInt(12_000_000), // Explicit gas limit for Sepolia
+      let verifierAddr = getMaspVerifierAddress(chainId)
+
+      // Deploy verifier if not already deployed
+      if (!verifierAddr) {
+        setDeployment(prev => ({ ...prev, step: 'deploying-verifier' }))
+
+        const hash = await walletClient.deployContract({
+          abi: MASP_VERIFIER_ABI,
+          bytecode: MASP_VERIFIER_BYTECODE,
+          gas: BigInt(12_000_000),
+        })
+
+        setDeployment(prev => ({ ...prev, step: 'waiting-verifier', txHash: hash }))
+        console.log('[Deploy] Verifier tx hash:', hash)
+
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash,
+          timeout: 120_000,
+        })
+
+        if (receipt.status === 'reverted') {
+          throw new Error('Verifier deployment reverted')
+        }
+
+        if (!receipt.contractAddress) {
+          throw new Error('No verifier contract address in receipt')
+        }
+
+        verifierAddr = receipt.contractAddress
+        console.log('[Deploy] Verifier deployed at:', verifierAddr)
+        setVerifierAddress(verifierAddr)
+        saveDeployedContracts(chainId, { verifier: verifierAddr })
+        setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'valid' }))
+      }
+
+      // Deploy pool
+      setDeployment(prev => ({ ...prev, step: 'deploying-pool', txHash: undefined }))
+
+      const poolHash = await walletClient.deployContract({
+        abi: MASP_POOL_ABI,
+        bytecode: MASP_POOL_BYTECODE,
+        args: [verifierAddr],
+        gas: BigInt(8_000_000),
       })
-      setPendingTxHash(hash)
-      setDeployStep('waiting-verifier')
+
+      setDeployment(prev => ({ ...prev, step: 'waiting-pool', txHash: poolHash }))
+      console.log('[Deploy] Pool tx hash:', poolHash)
+
+      const poolReceipt = await publicClient.waitForTransactionReceipt({
+        hash: poolHash,
+        timeout: 120_000,
+      })
+
+      if (poolReceipt.status === 'reverted') {
+        throw new Error('Pool deployment reverted')
+      }
+
+      if (!poolReceipt.contractAddress) {
+        throw new Error('No pool contract address in receipt')
+      }
+
+      const poolAddr = poolReceipt.contractAddress
+      console.log('[Deploy] Pool deployed at:', poolAddr)
+      setPoolAddress(poolAddr)
+      saveDeployedContracts(chainId, { pool: poolAddr })
+
+      // Verify bytecode
+      setDeployment(prev => ({ ...prev, step: 'verifying' }))
+
+      const poolCode = await publicClient.getCode({ address: poolAddr })
+      const poolValid = poolCode && poolCode !== '0x' && poolCode.length > 10
+
+      setDeployment(prev => ({
+        ...prev,
+        step: 'done',
+        poolBytecodeStatus: poolValid ? 'valid' : 'invalid',
+      }))
+
     } catch (err) {
-      setDeployError(err instanceof Error ? err.message : 'Failed to deploy verifier')
-      setDeployStep('idle')
+      console.error('[Deploy] Error:', err)
+      setDeployment(prev => ({
+        ...prev,
+        step: 'idle',
+        error: err instanceof Error ? err.message : 'Deployment failed',
+      }))
     }
   }
 
-  const isDeploying = deployStep !== 'idle' && deployStep !== 'done'
+  const isDeploying = deployment.step !== 'idle' && deployment.step !== 'done'
   const decimals = tokenDecimals ?? 18
 
   const handleClearContracts = () => {
     clearDeployedContracts(chainId)
     setVerifierAddress(undefined)
     setPoolAddress(undefined)
-    setDeployStep('idle')
-    setDeployError(null)
+    setDeployment({
+      step: 'idle',
+      verifierBytecodeStatus: 'unknown',
+      poolBytecodeStatus: 'unknown',
+      error: undefined,
+      txHash: undefined,
+    })
   }
 
   const getDeployButtonText = () => {
-    switch (deployStep) {
+    switch (deployment.step) {
       case 'deploying-verifier':
         return 'Deploying Verifier...'
       case 'waiting-verifier':
@@ -195,11 +278,40 @@ function App() {
         return 'Deploying Pool...'
       case 'waiting-pool':
         return 'Waiting for Pool...'
+      case 'verifying':
+        return 'Verifying Bytecode...'
       case 'done':
         return 'Contracts Deployed!'
       default:
-        // If verifier exists but not pool, show different text
         return verifierAddress && !poolAddress ? 'Deploy MASP Pool' : 'Deploy MASP Contracts'
+    }
+  }
+
+  const getBytecodeStatusIcon = (status: BytecodeStatus) => {
+    switch (status) {
+      case 'checking':
+        return '⏳'
+      case 'valid':
+        return '✓'
+      case 'invalid':
+        return '✗'
+      case 'error':
+        return '⚠'
+      default:
+        return '?'
+    }
+  }
+
+  const getBytecodeStatusClass = (status: BytecodeStatus) => {
+    switch (status) {
+      case 'valid':
+        return 'bytecode-valid'
+      case 'invalid':
+        return 'bytecode-invalid'
+      case 'error':
+        return 'bytecode-error'
+      default:
+        return 'bytecode-unknown'
     }
   }
 
@@ -269,9 +381,14 @@ function App() {
             <div className="contract-item">
               <span className="contract-label">Verifier:</span>
               {verifierAddress ? (
-                <span className="contract-address deployed">
-                  {verifierAddress.slice(0, 6)}...{verifierAddress.slice(-4)}
-                </span>
+                <>
+                  <span className="contract-address deployed">
+                    {verifierAddress.slice(0, 6)}...{verifierAddress.slice(-4)}
+                  </span>
+                  <span className={`bytecode-status ${getBytecodeStatusClass(deployment.verifierBytecodeStatus)}`}>
+                    {getBytecodeStatusIcon(deployment.verifierBytecodeStatus)}
+                  </span>
+                </>
               ) : (
                 <span className="contract-address not-deployed">Not deployed</span>
               )}
@@ -279,32 +396,54 @@ function App() {
             <div className="contract-item">
               <span className="contract-label">Pool:</span>
               {poolAddress ? (
-                <span className="contract-address deployed">
-                  {poolAddress.slice(0, 6)}...{poolAddress.slice(-4)}
-                </span>
+                <>
+                  <span className="contract-address deployed">
+                    {poolAddress.slice(0, 6)}...{poolAddress.slice(-4)}
+                  </span>
+                  <span className={`bytecode-status ${getBytecodeStatusClass(deployment.poolBytecodeStatus)}`}>
+                    {getBytecodeStatusIcon(deployment.poolBytecodeStatus)}
+                  </span>
+                </>
               ) : (
                 <span className="contract-address not-deployed">Not deployed</span>
               )}
             </div>
           </div>
 
+          {/* Deployment Status Display */}
+          {isDeploying && (
+            <div className="deployment-status">
+              <div className="deployment-step">
+                <div className="deploy-spinner"></div>
+                <span>{getDeployButtonText()}</span>
+              </div>
+              {deployment.txHash && (
+                <div className="deployment-tx">
+                  <span className="tx-label">Transaction:</span>
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${deployment.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="tx-link"
+                  >
+                    {deployment.txHash.slice(0, 10)}...{deployment.txHash.slice(-8)}
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="deploy-section">
             {!poolAddress ? (
               <>
                 <button
                   onClick={handleDeploy}
-                  disabled={isDeploying || !isConnected}
+                  disabled={isDeploying || !isConnected || !walletClient}
                   className="deploy-btn"
                 >
                   {getDeployButtonText()}
                 </button>
-                {deployError && <div className="deploy-error">{deployError}</div>}
-                {isDeploying && (
-                  <div className="deploy-progress">
-                    <div className="deploy-spinner"></div>
-                    <span>This deploys both MASPVerifier and MASPPool contracts</span>
-                  </div>
-                )}
+                {deployment.error && <div className="deploy-error">{deployment.error}</div>}
               </>
             ) : (
               <button
@@ -316,6 +455,15 @@ function App() {
               </button>
             )}
           </div>
+
+          {/* Bytecode Status Legend */}
+          {(verifierAddress || poolAddress) && (
+            <div className="bytecode-legend">
+              <span className="legend-item"><span className="bytecode-valid">✓</span> = Bytecode verified</span>
+              <span className="legend-item"><span className="bytecode-invalid">✗</span> = No bytecode found</span>
+              <span className="legend-item"><span className="bytecode-unknown">?</span> = Not checked</span>
+            </div>
+          )}
         </div>
       )}
 

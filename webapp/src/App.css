@@ -697,3 +697,103 @@
   border-color: #f56565;
   background: rgba(245, 101, 101, 0.05);
 }
+
+/* Deployment Status Display */
+.deployment-status {
+  background: rgba(74, 158, 255, 0.1);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.deployment-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #4a9eff;
+  font-weight: 500;
+}
+
+.deployment-tx {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(74, 158, 255, 0.2);
+  font-size: 0.85rem;
+}
+
+.tx-label {
+  color: #888;
+}
+
+.tx-link {
+  color: #4a9eff;
+  font-family: monospace;
+  text-decoration: none;
+}
+
+.tx-link:hover {
+  text-decoration: underline;
+}
+
+/* Bytecode Status Indicators */
+.bytecode-status {
+  font-size: 1rem;
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.bytecode-valid {
+  color: #48bb78;
+  background: rgba(72, 187, 120, 0.1);
+}
+
+.bytecode-invalid {
+  color: #f56565;
+  background: rgba(245, 101, 101, 0.1);
+}
+
+.bytecode-error {
+  color: #ed8936;
+  background: rgba(237, 137, 54, 0.1);
+}
+
+.bytecode-unknown {
+  color: #888;
+  background: rgba(136, 136, 136, 0.1);
+}
+
+/* Bytecode Legend */
+.bytecode-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #333;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.legend-item .bytecode-valid,
+.legend-item .bytecode-invalid,
+.legend-item .bytecode-unknown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
