@@ -132,10 +132,16 @@ fn proof_to_format(proof: &Proof<Bls12>) -> ProofData {
     }
 }
 
-/// Convert scalar to 32-byte hex string
+/// Convert scalar to 32-byte hex string in big-endian format (EIP-2537 expects big-endian)
 fn scalar_to_hex(s: &Scalar) -> String {
     let bytes = s.to_repr();
-    hex::encode(bytes.as_ref())
+    let bytes_ref = bytes.as_ref();
+    // Reverse from little-endian (Rust) to big-endian (EIP-2537/Solidity)
+    let mut be_bytes = [0u8; 32];
+    for i in 0..32 {
+        be_bytes[i] = bytes_ref[31 - i];
+    }
+    hex::encode(&be_bytes)
 }
 
 // ============================================================================
