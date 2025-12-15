@@ -149,6 +149,39 @@ function App() {
     verifyBytecode()
   }, [verifierAddress, poolAddress, publicClient, deployment.verifierBytecodeStatus, deployment.poolBytecodeStatus])
 
+  // Manual polling for transaction receipt - more reliable than waitForTransactionReceipt
+  const pollForReceipt = async (
+    hash: `0x${string}`,
+    timeoutMs: number = 180_000,
+    pollIntervalMs: number = 3_000
+  ) => {
+    if (!publicClient) throw new Error('Public client not available')
+
+    const startTime = Date.now()
+    let attempts = 0
+
+    while (Date.now() - startTime < timeoutMs) {
+      attempts++
+      console.log(`[Deploy] Polling for receipt (attempt ${attempts})...`)
+
+      try {
+        const receipt = await publicClient.getTransactionReceipt({ hash })
+        if (receipt) {
+          console.log('[Deploy] Receipt found:', receipt)
+          return receipt
+        }
+      } catch (err) {
+        // Receipt not found yet, this is expected
+        console.log('[Deploy] Receipt not yet available, will retry...')
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+    }
+
+    throw new Error(`Transaction receipt not found after ${timeoutMs / 1000} seconds`)
+  }
+
   const handleDeploy = async () => {
     if (!walletClient || !publicClient) {
       setDeployment(prev => ({ ...prev, error: 'Wallet not connected' }))
@@ -179,10 +212,8 @@ function App() {
         setDeployment(prev => ({ ...prev, step: 'waiting-verifier', txHash: hash }))
         console.log('[Deploy] Verifier tx hash:', hash)
 
-        const receipt = await publicClient.waitForTransactionReceipt({
-          hash,
-          timeout: 120_000,
-        })
+        // Use manual polling instead of waitForTransactionReceipt
+        const receipt = await pollForReceipt(hash)
 
         if (receipt.status === 'reverted') {
           throw new Error('Verifier deployment reverted')
@@ -212,10 +243,8 @@ function App() {
       setDeployment(prev => ({ ...prev, step: 'waiting-pool', txHash: poolHash }))
       console.log('[Deploy] Pool tx hash:', poolHash)
 
-      const poolReceipt = await publicClient.waitForTransactionReceipt({
-        hash: poolHash,
-        timeout: 120_000,
-      })
+      // Use manual polling instead of waitForTransactionReceipt
+      const poolReceipt = await pollForReceipt(poolHash)
 
       if (poolReceipt.status === 'reverted') {
         throw new Error('Pool deployment reverted')
