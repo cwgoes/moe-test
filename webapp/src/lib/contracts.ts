@@ -209,37 +209,31 @@ export function saveDeployedContracts(chainId: number, contracts: DeployedContra
   localStorage.setItem(`${STORAGE_KEY}_${chainId}`, JSON.stringify(updated));
 }
 
-// Get MASP Pool address (from localStorage or defaults)
+// Clear deployed contracts from localStorage for a chain
+export function clearDeployedContracts(chainId: number): void {
+  localStorage.removeItem(`${STORAGE_KEY}_${chainId}`);
+}
+
+// Get MASP Pool address (from localStorage only - no hardcoded defaults)
 export function getMaspPoolAddress(chainId: number): `0x${string}` | undefined {
-  // First check localStorage for deployed contract
+  // Only return addresses from localStorage - user must deploy contracts
   const deployed = getDeployedContracts(chainId);
   if (deployed.pool && deployed.pool !== '0x0000000000000000000000000000000000000000') {
     return deployed.pool;
   }
 
-  // Fall back to defaults
-  const defaults: Record<number, `0x${string}`> = {
-    11155111: '0x9dc72ccba2002a2039cfef7f609794a9ae8fcbe5', // Sepolia deployed pool
-    31337: '0x5FbDB2315678afecb367f032d93F642f64180aa3', // Localhost
-  };
-
-  return defaults[chainId];
+  return undefined;
 }
 
-// Get MASP Verifier address (from localStorage or defaults)
+// Get MASP Verifier address (from localStorage only - no hardcoded defaults)
 export function getMaspVerifierAddress(chainId: number): `0x${string}` | undefined {
-  // First check localStorage for deployed contract
+  // Only return addresses from localStorage - user must deploy contracts
   const deployed = getDeployedContracts(chainId);
   if (deployed.verifier && deployed.verifier !== '0x0000000000000000000000000000000000000000') {
     return deployed.verifier;
   }
 
-  // Fall back to defaults
-  const defaults: Record<number, `0x${string}`> = {
-    11155111: '0xcf58e5e793716ca0eeb9cd6a9045929e0489c009', // Sepolia deployed verifier
-  };
-
-  return defaults[chainId];
+  return undefined;
 }
 
 // Get default token address for a chain

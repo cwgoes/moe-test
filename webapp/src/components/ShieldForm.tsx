@@ -158,7 +158,7 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
     }
   }, [amount, recipientPk, tokenAddress, tokenBalance, allowance, validateInputs]);
 
-  // Simulate the shield transaction
+  // Simulate the shield transaction with timeout
   const simulateTransaction = async (
     proofBytes: `0x${string}`,
     publicInputs: `0x${string}`[],
@@ -168,6 +168,9 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
       return { success: false, error: 'Client not ready' };
     }
 
+    // Add timeout to prevent hanging
+    const SIMULATION_TIMEOUT = 15000; // 15 seconds
+
     try {
       // Encode the shield function call
       const data = encodeFunctionData({
@@ -176,12 +179,20 @@ export function ShieldForm({ defaultToken, poolAddress }: ShieldFormProps) {
         args: [tokenAddress as `0x${string}`, amountBigInt, proofBytes, publicInputs],
       });
 
-      // Simulate the transaction using eth_call
-      await publicClient.call({
-        account: address,
-        to: maspPoolAddress,
-        data,
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Simulation timed out after 15 seconds. The contract may not be deployed or the network is slow.')), SIMULATION_TIMEOUT);
       });
+
+      // Simulate the transaction using eth_call with timeout
+      await Promise.race([
+        publicClient.call({
+          account: address,
+          to: maspPoolAddress,
+          data,
+        }),
+        timeoutPromise,
+      ]);
 
       return { success: true };
     } catch (err) {

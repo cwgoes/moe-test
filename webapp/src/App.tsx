@@ -16,6 +16,7 @@ import {
   getMaspPoolAddress,
   getMaspVerifierAddress,
   saveDeployedContracts,
+  clearDeployedContracts,
 } from './lib/contracts'
 import './App.css'
 
@@ -176,6 +177,14 @@ function App() {
   const isDeploying = deployStep !== 'idle' && deployStep !== 'done'
   const decimals = tokenDecimals ?? 18
 
+  const handleClearContracts = () => {
+    clearDeployedContracts(chainId)
+    setVerifierAddress(undefined)
+    setPoolAddress(undefined)
+    setDeployStep('idle')
+    setDeployError(null)
+  }
+
   const getDeployButtonText = () => {
     switch (deployStep) {
       case 'deploying-verifier':
@@ -279,24 +288,34 @@ function App() {
             </div>
           </div>
 
-          {!poolAddress && (
-            <div className="deploy-section">
+          <div className="deploy-section">
+            {!poolAddress ? (
+              <>
+                <button
+                  onClick={handleDeploy}
+                  disabled={isDeploying || !isConnected}
+                  className="deploy-btn"
+                >
+                  {getDeployButtonText()}
+                </button>
+                {deployError && <div className="deploy-error">{deployError}</div>}
+                {isDeploying && (
+                  <div className="deploy-progress">
+                    <div className="deploy-spinner"></div>
+                    <span>This deploys both MASPVerifier and MASPPool contracts</span>
+                  </div>
+                )}
+              </>
+            ) : (
               <button
-                onClick={handleDeploy}
-                disabled={isDeploying || !isConnected}
-                className="deploy-btn"
+                onClick={handleClearContracts}
+                disabled={isDeploying}
+                className="btn secondary"
               >
-                {getDeployButtonText()}
+                Clear & Redeploy Contracts
               </button>
-              {deployError && <div className="deploy-error">{deployError}</div>}
-              {isDeploying && (
-                <div className="deploy-progress">
-                  <div className="deploy-spinner"></div>
-                  <span>This deploys both MASPVerifier and MASPPool contracts</span>
-                </div>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
