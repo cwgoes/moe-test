@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useAccount, useConnect, useDisconnect, useChainId, useReadContract, useDeployContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useAccount, useConnect, useDisconnect, useChainId, useReadContract, useDeployContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
+import { sepolia } from 'wagmi/chains'
 import { formatUnits } from 'viem'
 import { ShieldForm } from './components/ShieldForm'
 import { UnshieldForm } from './components/UnshieldForm'
@@ -34,6 +35,10 @@ function App() {
   const { connect, connectors } = useConnect()
   const { disconnect } = useDisconnect()
   const chainId = useChainId()
+  const { switchChain, isPending: isSwitchingChain } = useSwitchChain()
+
+  // Check if we're on Sepolia
+  const isOnSepolia = chainId === sepolia.id
 
   // Get default token address for the current chain
   const defaultToken = getDefaultTokenAddress(chainId)
@@ -170,7 +175,18 @@ function App() {
               <span className="address">
                 {address?.slice(0, 6)}...{address?.slice(-4)}
               </span>
-              <span className="chain">Chain: {chainId}</span>
+              <span className={`chain ${isOnSepolia ? 'correct' : 'wrong'}`}>
+                {isOnSepolia ? 'Sepolia' : `Chain: ${chainId}`}
+              </span>
+              {!isOnSepolia && (
+                <button
+                  onClick={() => switchChain({ chainId: sepolia.id })}
+                  disabled={isSwitchingChain}
+                  className="switch-btn"
+                >
+                  {isSwitchingChain ? 'Switching...' : 'Switch to Sepolia'}
+                </button>
+              )}
               <button onClick={() => disconnect()} className="disconnect-btn">
                 Disconnect
               </button>

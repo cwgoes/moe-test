@@ -47,6 +47,38 @@
 .chain {
   color: #888;
   font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.chain.correct {
+  color: #48bb78;
+  background: rgba(72, 187, 120, 0.1);
+}
+
+.chain.wrong {
+  color: #ed8936;
+  background: rgba(237, 137, 54, 0.1);
+}
+
+.switch-btn {
+  background: #ed8936;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.switch-btn:hover:not(:disabled) {
+  background: #dd7926;
+}
+
+.switch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .connect-buttons {
