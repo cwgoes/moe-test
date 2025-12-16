@@ -2,6 +2,13 @@
 cache/
 out/
 
+# Rust build artifacts
+masp-wasm/target/
+
+# Node.js
+webapp/node_modules/
+webapp/dist/
+
 # Ignores development broadcast logs
 !/broadcast
 /broadcast/*/31337/
@@ -12,3 +19,6 @@ docs/
 
 # Dotenv file
 .env
+
+# MASP parameter files (large binaries, download separately)
+webapp/public/params/*.params

@@ -190,12 +190,16 @@ contract MASPVerifierTest is Test {
         bytes memory proof = _getDummyProof();
 
         vm.expectRevert(MASPVerifier.VerificationKeyNotInitialized.selector);
+        // Real MASP Spend: 7 public inputs: rk.u, rk.v, cv.u, cv.v, anchor, nf[0], nf[1]
         verifier.verifySpendProof(
             proof,
-            bytes32(uint256(1)), // anchor
-            bytes32(uint256(2)), // valueCommitment
-            bytes32(uint256(3)), // nullifier
-            bytes32(uint256(4))  // rvk
+            bytes32(uint256(1)), // rkU
+            bytes32(uint256(2)), // rkV
+            bytes32(uint256(3)), // cvU
+            bytes32(uint256(4)), // cvV
+            bytes32(uint256(5)), // anchor
+            bytes32(uint256(6)), // nf0
+            bytes32(uint256(7))  // nf1
         );
     }
 
@@ -203,11 +207,14 @@ contract MASPVerifierTest is Test {
         bytes memory proof = _getDummyProof();
 
         vm.expectRevert(MASPVerifier.VerificationKeyNotInitialized.selector);
+        // Real MASP Output: 5 public inputs: cv.u, cv.v, epk.u, epk.v, cm
         verifier.verifyOutputProof(
             proof,
-            bytes32(uint256(1)), // valueCommitment
-            bytes32(uint256(2)), // noteCommitment
-            bytes32(uint256(3))  // epk
+            bytes32(uint256(1)), // cvU
+            bytes32(uint256(2)), // cvV
+            bytes32(uint256(3)), // epkU
+            bytes32(uint256(4)), // epkV
+            bytes32(uint256(5))  // cm
         );
     }
 

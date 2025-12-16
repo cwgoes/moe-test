@@ -1,0 +1,13 @@
+# MASP Parameter Files Directory
+#
+# Download the following files and place them here:
+#
+# 1. masp-spend.params (~49.8 MB):
+#    https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params
+#
+# 2. masp-output.params (~16.4 MB):
+#    https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params
+#
+# You can download them with:
+#   curl -L -o masp-spend.params https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params
+#   curl -L -o masp-output.params https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params
