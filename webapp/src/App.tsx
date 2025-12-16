@@ -6,7 +6,7 @@ import { ShieldForm } from './components/ShieldForm'
 import { UnshieldForm } from './components/UnshieldForm'
 import { ProverStatus } from './components/ProverStatus'
 import { WethActions } from './components/WethActions'
-import { initProver } from './lib/prover'
+import { initProver, getOutputVerificationKey, getSpendVerificationKey } from './lib/prover'
 import {
   ERC20_ABI,
   MASP_VERIFIER_ABI,
@@ -22,7 +22,7 @@ import {
 import './App.css'
 
 type TabType = 'shield' | 'unshield'
-type DeployStep = 'idle' | 'deploying-verifier' | 'waiting-verifier' | 'deploying-pool' | 'waiting-pool' | 'verifying' | 'done'
+type DeployStep = 'idle' | 'deploying-verifier' | 'waiting-verifier' | 'setting-output-vk' | 'waiting-output-vk' | 'setting-spend-vk' | 'waiting-spend-vk' | 'deploying-pool' | 'waiting-pool' | 'verifying' | 'done'
 type BytecodeStatus = 'unknown' | 'checking' | 'valid' | 'invalid' | 'error'
 
 interface DeploymentStatus {
@@ -247,6 +247,68 @@ function App() {
         setVerifierAddress(verifierAddr)
         saveDeployedContracts(chainId, { verifier: verifierAddr })
         setDeployment(prev => ({ ...prev, verifierBytecodeStatus: 'valid' }))
+
+        // Set Output circuit verification key (for shield operations)
+        setDeployment(prev => ({ ...prev, step: 'setting-output-vk', txHash: undefined }))
+        console.log('[Deploy] Getting Output circuit verification key from prover...')
+
+        const outputVk = getOutputVerificationKey()
+        console.log('[Deploy] Output VK:', outputVk)
+
+        const outputVkHash = await walletClient.writeContract({
+          address: verifierAddr,
+          abi: MASP_VERIFIER_ABI,
+          functionName: 'setVerificationKey',
+          args: [
+            1, // CircuitType.Output
+            outputVk.alpha as `0x${string}`,
+            outputVk.beta as `0x${string}`,
+            outputVk.gamma as `0x${string}`,
+            outputVk.delta as `0x${string}`,
+            outputVk.ic as `0x${string}`[],
+          ],
+          gas: BigInt(5_000_000),
+        })
+
+        setDeployment(prev => ({ ...prev, step: 'waiting-output-vk', txHash: outputVkHash }))
+        console.log('[Deploy] Output VK tx hash:', outputVkHash)
+
+        const outputVkReceipt = await pollForReceipt(outputVkHash)
+        if (outputVkReceipt.status === 'reverted') {
+          throw new Error('Setting Output VK reverted')
+        }
+        console.log('[Deploy] Output VK set successfully')
+
+        // Set Spend circuit verification key (for unshield operations)
+        setDeployment(prev => ({ ...prev, step: 'setting-spend-vk', txHash: undefined }))
+        console.log('[Deploy] Getting Spend circuit verification key from prover...')
+
+        const spendVk = getSpendVerificationKey()
+        console.log('[Deploy] Spend VK:', spendVk)
+
+        const spendVkHash = await walletClient.writeContract({
+          address: verifierAddr,
+          abi: MASP_VERIFIER_ABI,
+          functionName: 'setVerificationKey',
+          args: [
+            0, // CircuitType.Spend
+            spendVk.alpha as `0x${string}`,
+            spendVk.beta as `0x${string}`,
+            spendVk.gamma as `0x${string}`,
+            spendVk.delta as `0x${string}`,
+            spendVk.ic as `0x${string}`[],
+          ],
+          gas: BigInt(5_000_000),
+        })
+
+        setDeployment(prev => ({ ...prev, step: 'waiting-spend-vk', txHash: spendVkHash }))
+        console.log('[Deploy] Spend VK tx hash:', spendVkHash)
+
+        const spendVkReceipt = await pollForReceipt(spendVkHash)
+        if (spendVkReceipt.status === 'reverted') {
+          throw new Error('Setting Spend VK reverted')
+        }
+        console.log('[Deploy] Spend VK set successfully')
       }
 
       // Deploy pool
@@ -322,6 +384,14 @@ function App() {
         return 'Deploying Verifier...'
       case 'waiting-verifier':
         return 'Waiting for Verifier...'
+      case 'setting-output-vk':
+        return 'Setting Output VK...'
+      case 'waiting-output-vk':
+        return 'Waiting for Output VK...'
+      case 'setting-spend-vk':
+        return 'Setting Spend VK...'
+      case 'waiting-spend-vk':
+        return 'Waiting for Spend VK...'
       case 'deploying-pool':
         return 'Deploying Pool...'
       case 'waiting-pool':

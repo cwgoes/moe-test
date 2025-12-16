@@ -234,6 +234,31 @@ export function get_masp_info() {
     return takeFromExternrefTable0(ret[0]);
 }
 
+/**
+ * Get the verification key for the Output circuit (used for shielding)
+ * Returns the VK in a format suitable for the MASPVerifier contract
+ * @returns {any}
+ */
+export function get_output_verification_key() {
+    const ret = wasm.get_output_verification_key();
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Get the verification key for the Spend circuit (used for unshielding)
+ * @returns {any}
+ */
+export function get_spend_verification_key() {
+    const ret = wasm.get_spend_verification_key();
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
 export function init() {
     wasm.init();
 }

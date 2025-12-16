@@ -114,6 +114,20 @@ export const MASP_VERIFIER_ABI = [
   },
   {
     type: 'function',
+    name: 'setVerificationKey',
+    inputs: [
+      { name: 'circuitType', type: 'uint8' },
+      { name: 'alpha', type: 'bytes' },
+      { name: 'beta', type: 'bytes' },
+      { name: 'gamma', type: 'bytes' },
+      { name: 'delta', type: 'bytes' },
+      { name: 'ic', type: 'bytes[]' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'verifyProof',
     inputs: [
       { name: 'circuitType', type: 'uint8' },
@@ -122,6 +136,27 @@ export const MASP_VERIFIER_ABI = [
     ],
     outputs: [{ type: 'bool' }],
     stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'isInitialized',
+    inputs: [{ name: 'circuitType', type: 'uint8' }],
+    outputs: [{ type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'owner',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'event',
+    name: 'VerificationKeySet',
+    inputs: [
+      { name: 'circuitType', type: 'uint8', indexed: true },
+    ],
   },
 ] as const;
 

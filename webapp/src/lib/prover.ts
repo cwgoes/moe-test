@@ -25,6 +25,14 @@ export interface UnshieldRequest {
   spend_key: string;
 }
 
+export interface VerificationKeyData {
+  alpha: string;      // G1 point hex
+  beta: string;       // G2 point hex
+  gamma: string;      // G2 point hex
+  delta: string;      // G2 point hex
+  ic: string[];       // Array of G1 point hexes
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type WasmModule = any;
 
@@ -147,18 +155,18 @@ export function generateRandomness(): string {
   return wasmModule.generate_randomness();
 }
 
-export function getOutputVK(): unknown {
+export function getOutputVerificationKey(): VerificationKeyData {
   if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmModule.get_output_vk();
+  return wasmModule.get_output_verification_key();
 }
 
-export function getSpendVK(): unknown {
+export function getSpendVerificationKey(): VerificationKeyData {
   if (!wasmModule) {
     throw new Error('Prover not initialized');
   }
 
-  return wasmModule.get_spend_vk();
+  return wasmModule.get_spend_verification_key();
 }

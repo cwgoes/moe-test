@@ -778,3 +778,92 @@ pub fn get_masp_info() -> Result<JsValue, JsValue> {
         "note": "This is a demo implementation using MiMC hash. Production MASP uses Pedersen commitments from Namada's trusted setup."
     }))?)
 }
+
+/// Verification key data for contract
+#[derive(Serialize, Deserialize)]
+pub struct VerificationKeyData {
+    pub alpha: String,      // G1 point (128 bytes uncompressed, 48 compressed)
+    pub beta: String,       // G2 point (256 bytes uncompressed, 96 compressed)
+    pub gamma: String,      // G2 point
+    pub delta: String,      // G2 point
+    pub ic: Vec<String>,    // Array of G1 points
+}
+
+fn g1_to_uncompressed_hex(point: &bls12_381::G1Affine) -> String {
+    // The contract expects uncompressed format: 128 bytes (x: 64 bytes, y: 64 bytes)
+    // BLS12-381 G1 points have 48-byte coordinates, padded to 64 bytes for EIP-2537
+    let bytes = point.to_uncompressed();
+    hex::encode(bytes)
+}
+
+fn g2_to_uncompressed_hex(point: &bls12_381::G2Affine) -> String {
+    // The contract expects uncompressed format: 256 bytes (x: 128 bytes, y: 128 bytes)
+    // BLS12-381 G2 points have 96-byte coordinates (48 * 2), padded to 128 bytes for EIP-2537
+    let bytes = point.to_uncompressed();
+    hex::encode(bytes)
+}
+
+/// Get the verification key for the Output circuit (used for shielding)
+/// Returns the VK in a format suitable for the MASPVerifier contract
+#[wasm_bindgen]
+pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
+    web_sys::console::log_1(&"[MASP] Getting output circuit verification key...".into());
+
+    let params = get_output_params();
+    let vk = &params.vk;
+
+    // Convert VK components to hex strings
+    let alpha_hex = g1_to_uncompressed_hex(&vk.alpha_g1);
+    let beta_hex = g2_to_uncompressed_hex(&vk.beta_g2);
+    let gamma_hex = g2_to_uncompressed_hex(&vk.gamma_g2);
+    let delta_hex = g2_to_uncompressed_hex(&vk.delta_g2);
+
+    // Convert IC points
+    let ic_hex: Vec<String> = vk.ic.iter()
+        .map(|point| g1_to_uncompressed_hex(point))
+        .collect();
+
+    web_sys::console::log_1(&format!("[MASP] Output VK: {} IC points", ic_hex.len()).into());
+
+    let vk_data = VerificationKeyData {
+        alpha: format!("0x{}", alpha_hex),
+        beta: format!("0x{}", beta_hex),
+        gamma: format!("0x{}", gamma_hex),
+        delta: format!("0x{}", delta_hex),
+        ic: ic_hex.iter().map(|s| format!("0x{}", s)).collect(),
+    };
+
+    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
+}
+
+/// Get the verification key for the Spend circuit (used for unshielding)
+#[wasm_bindgen]
+pub fn get_spend_verification_key() -> Result<JsValue, JsValue> {
+    web_sys::console::log_1(&"[MASP] Getting spend circuit verification key...".into());
+
+    let params = get_spend_params();
+    let vk = &params.vk;
+
+    // Convert VK components to hex strings
+    let alpha_hex = g1_to_uncompressed_hex(&vk.alpha_g1);
+    let beta_hex = g2_to_uncompressed_hex(&vk.beta_g2);
+    let gamma_hex = g2_to_uncompressed_hex(&vk.gamma_g2);
+    let delta_hex = g2_to_uncompressed_hex(&vk.delta_g2);
+
+    // Convert IC points
+    let ic_hex: Vec<String> = vk.ic.iter()
+        .map(|point| g1_to_uncompressed_hex(point))
+        .collect();
+
+    web_sys::console::log_1(&format!("[MASP] Spend VK: {} IC points", ic_hex.len()).into());
+
+    let vk_data = VerificationKeyData {
+        alpha: format!("0x{}", alpha_hex),
+        beta: format!("0x{}", beta_hex),
+        gamma: format!("0x{}", gamma_hex),
+        delta: format!("0x{}", delta_hex),
+        ic: ic_hex.iter().map(|s| format!("0x{}", s)).collect(),
+    };
+
+    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
+}
