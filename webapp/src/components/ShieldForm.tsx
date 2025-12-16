@@ -343,6 +343,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
       const elapsed = Date.now() - startTime;
       setProofTime(elapsed);
+      saveProofTime(elapsed); // Save for future time estimates
       console.log(`[UI] Proof generation completed in ${elapsed}ms`);
       console.log('[UI] Proof result:', proofResult);
 
@@ -443,10 +444,54 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
   const canShield = !needsApproval && !insufficientBalance && isAddress(tokenAddress) && amount && recipientDiversifier && recipientPkD && !isPending && !isGeneratingProof && !!maspPoolAddress;
 
+  // Format time display
   const formatTime = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    }
+    return `${(ms / 1000).toFixed(1)}s`;
   };
+
+  // Get estimated proof time from localStorage (default 25s for Output circuit)
+  const getEstimatedProofTime = (): number => {
+    try {
+      const stored = localStorage.getItem('masp-output-proof-times');
+      if (stored) {
+        const times = JSON.parse(stored) as number[];
+        if (times.length > 0) {
+          // Return average of last 3 times
+          const recent = times.slice(-3);
+          return Math.round(recent.reduce((a, b) => a + b, 0) / recent.length);
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+    return 25000; // Default 25 seconds
+  };
+
+  // Save proof time to localStorage
+  const saveProofTime = (ms: number) => {
+    try {
+      const stored = localStorage.getItem('masp-output-proof-times');
+      const times = stored ? JSON.parse(stored) as number[] : [];
+      times.push(ms);
+      // Keep only last 10 times
+      if (times.length > 10) times.shift();
+      localStorage.setItem('masp-output-proof-times', JSON.stringify(times));
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
+  const estimatedTime = getEstimatedProofTime();
+  const progressPercent = isGeneratingProof
+    ? Math.min(95, Math.round((elapsedTime / estimatedTime) * 100))
+    : 0;
+  const remainingTime = Math.max(0, estimatedTime - elapsedTime);
 
   return (
     <div className="form-container">
@@ -567,10 +612,25 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
           <div className="proof-spinner"></div>
           <div className="proof-progress-text">
             <span>Generating MASP Output proof...</span>
-            <span className="proof-timer">{formatTime(elapsedTime)}</span>
+            <div className="proof-timing">
+              <span className="proof-timer">{formatTime(elapsedTime)}</span>
+              <span className="proof-separator"> / </span>
+              <span className="proof-estimate">~{formatTime(estimatedTime)}</span>
+            </div>
           </div>
           <div className="proof-progress-bar">
-            <div className="proof-progress-bar-inner"></div>
+            <div
+              className="proof-progress-bar-inner"
+              style={{ width: `${progressPercent}%` }}
+            ></div>
+          </div>
+          <div className="proof-progress-info">
+            {remainingTime > 0 ? (
+              <span>Estimated time remaining: ~{formatTime(remainingTime)}</span>
+            ) : (
+              <span>Almost done...</span>
+            )}
+            <span className="progress-percent">{progressPercent}%</span>
           </div>
         </div>
       )}

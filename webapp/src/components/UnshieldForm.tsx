@@ -227,6 +227,7 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
 
       const elapsed = Date.now() - startTime;
       setProofTime(elapsed);
+      saveProofTime(elapsed); // Save for future time estimates
       console.log(`[UI] Spend proof generation completed in ${elapsed}ms`);
       console.log('[UI] Proof result:', proofResult);
 
@@ -325,10 +326,52 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
     !isGeneratingProof &&
     !!maspPoolAddress;
 
+  // Format time display
   const formatTime = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    }
+    return `${(ms / 1000).toFixed(1)}s`;
   };
+
+  // Get estimated proof time from localStorage (default 45s for Spend circuit - larger than Output)
+  const getEstimatedProofTime = (): number => {
+    try {
+      const stored = localStorage.getItem('masp-spend-proof-times');
+      if (stored) {
+        const times = JSON.parse(stored) as number[];
+        if (times.length > 0) {
+          const recent = times.slice(-3);
+          return Math.round(recent.reduce((a, b) => a + b, 0) / recent.length);
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+    return 45000; // Default 45 seconds (Spend is larger than Output)
+  };
+
+  // Save proof time to localStorage
+  const saveProofTime = (ms: number) => {
+    try {
+      const stored = localStorage.getItem('masp-spend-proof-times');
+      const times = stored ? JSON.parse(stored) as number[] : [];
+      times.push(ms);
+      if (times.length > 10) times.shift();
+      localStorage.setItem('masp-spend-proof-times', JSON.stringify(times));
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
+  const estimatedTime = getEstimatedProofTime();
+  const progressPercent = isGeneratingProof
+    ? Math.min(95, Math.round((elapsedTime / estimatedTime) * 100))
+    : 0;
+  const remainingTime = Math.max(0, estimatedTime - elapsedTime);
 
   return (
     <div className="form-container">
@@ -469,10 +512,25 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
           <div className="proof-spinner"></div>
           <div className="proof-progress-text">
             <span>Generating MASP Spend proof...</span>
-            <span className="proof-timer">{formatTime(elapsedTime)}</span>
+            <div className="proof-timing">
+              <span className="proof-timer">{formatTime(elapsedTime)}</span>
+              <span className="proof-separator"> / </span>
+              <span className="proof-estimate">~{formatTime(estimatedTime)}</span>
+            </div>
           </div>
           <div className="proof-progress-bar">
-            <div className="proof-progress-bar-inner"></div>
+            <div
+              className="proof-progress-bar-inner"
+              style={{ width: `${progressPercent}%` }}
+            ></div>
+          </div>
+          <div className="proof-progress-info">
+            {remainingTime > 0 ? (
+              <span>Estimated time remaining: ~{formatTime(remainingTime)}</span>
+            ) : (
+              <span>Almost done...</span>
+            )}
+            <span className="progress-percent">{progressPercent}%</span>
           </div>
         </div>
       )}

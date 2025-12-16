@@ -408,8 +408,14 @@
   font-size: 0.9rem;
 }
 
-.proof-progress-text span:first-child {
+.proof-progress-text > span:first-child {
   color: #ccc;
+}
+
+.proof-timing {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .proof-timer {
@@ -419,28 +425,44 @@
   font-size: 1.1rem;
 }
 
+.proof-separator {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.proof-estimate {
+  font-family: monospace;
+  color: #888;
+  font-size: 0.9rem;
+}
+
 .proof-progress-bar {
-  height: 4px;
+  height: 6px;
   background: rgba(74, 158, 255, 0.2);
-  border-radius: 2px;
+  border-radius: 3px;
   overflow: hidden;
 }
 
 .proof-progress-bar-inner {
   height: 100%;
-  background: linear-gradient(90deg, #4a9eff, #8b5cf6, #4a9eff);
-  background-size: 200% 100%;
-  animation: progress-flow 1.5s linear infinite;
-  width: 100%;
+  background: linear-gradient(90deg, #4a9eff, #8b5cf6);
+  border-radius: 3px;
+  transition: width 0.3s ease-out;
 }
 
-@keyframes progress-flow {
-  0% {
-    background-position: 100% 0;
-  }
-  100% {
-    background-position: -100% 0;
-  }
+.proof-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.proof-progress-info .progress-percent {
+  font-family: monospace;
+  color: #4a9eff;
+  font-weight: bold;
 }
 
 /* Info Box */
