@@ -216,7 +216,8 @@ export function derive_asset_type(token_address) {
 }
 
 /**
- * Generate a random diversifier
+ * Generate a random valid diversifier
+ * This tries random diversifiers until finding one that maps to a valid curve point
  * @returns {string}
  */
 export function generate_diversifier() {
@@ -239,6 +240,19 @@ export function generate_diversifier() {
  */
 export function generate_output_proof(request_js) {
     const ret = wasm.generate_output_proof(request_js);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Generate a random valid payment address (for testing)
+ * Returns diversifier and pk_d that can be used together for shielding
+ * @returns {any}
+ */
+export function generate_random_payment_address() {
+    const ret = wasm.generate_random_payment_address();
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }

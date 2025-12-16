@@ -753,12 +753,67 @@ pub fn generate_randomness() -> String {
     format!("0x{}", hex::encode(be_bytes))
 }
 
-/// Generate a random diversifier
+/// Generate a random valid diversifier
+/// This tries random diversifiers until finding one that maps to a valid curve point
 #[wasm_bindgen]
 pub fn generate_diversifier() -> String {
-    let mut bytes = [0u8; 11];
-    getrandom::getrandom(&mut bytes).expect("getrandom failed");
-    format!("0x{}", hex::encode(bytes))
+    loop {
+        let mut bytes = [0u8; 11];
+        getrandom::getrandom(&mut bytes).expect("getrandom failed");
+        let diversifier = Diversifier(bytes);
+        // Check if this diversifier maps to a valid curve point
+        if diversifier.g_d().is_some() {
+            return format!("0x{}", hex::encode(bytes));
+        }
+    }
+}
+
+/// Random payment address data for testing
+#[derive(Serialize, Deserialize)]
+pub struct RandomPaymentAddress {
+    pub diversifier: String,
+    pub pk_d: String,
+}
+
+/// Generate a random valid payment address (for testing)
+/// Returns diversifier and pk_d that can be used together for shielding
+#[wasm_bindgen]
+pub fn generate_random_payment_address() -> Result<JsValue, JsValue> {
+    use masp_proofs::group::GroupEncoding;
+
+    // Generate a random incoming viewing key (ivk)
+    let ivk = jubjub::Fr::random(&mut OsRng);
+
+    // Generate a valid diversifier
+    let diversifier = loop {
+        let mut bytes = [0u8; 11];
+        getrandom::getrandom(&mut bytes).expect("getrandom failed");
+        let d = Diversifier(bytes);
+        if d.g_d().is_some() {
+            break d;
+        }
+    };
+
+    // Compute pk_d = ivk * g_d(diversifier)
+    let g_d = diversifier.g_d()
+        .ok_or_else(|| JsValue::from_str("Invalid diversifier"))?;
+    let pk_d: jubjub::SubgroupPoint = (g_d * ivk).into();
+
+    // Verify we can create a valid payment address
+    PaymentAddress::from_parts(diversifier, pk_d)
+        .ok_or_else(|| JsValue::from_str("Failed to create payment address"))?;
+
+    let result = RandomPaymentAddress {
+        diversifier: format!("0x{}", hex::encode(diversifier.0)),
+        pk_d: format!("0x{}", hex::encode(pk_d.to_bytes())),
+    };
+
+    web_sys::console::log_1(&format!(
+        "[MASP] Generated payment address: div={}, pk_d={}",
+        result.diversifier, result.pk_d
+    ).into());
+
+    Ok(serde_wasm_bindgen::to_value(&result)?)
 }
 
 /// Get the default asset type identifier for the native token

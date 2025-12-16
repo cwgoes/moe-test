@@ -426,6 +426,19 @@ export function generateDiversifier(): string {
   return wasmModule.generate_diversifier();
 }
 
+export interface RandomPaymentAddress {
+  diversifier: string;
+  pk_d: string;
+}
+
+export function generateRandomPaymentAddress(): RandomPaymentAddress {
+  if (!wasmModule) {
+    throw new Error('Prover not initialized');
+  }
+
+  return wasmModule.generate_random_payment_address();
+}
+
 export function deriveAssetType(tokenAddress: string): string {
   if (!wasmModule) {
     throw new Error('Prover not initialized');

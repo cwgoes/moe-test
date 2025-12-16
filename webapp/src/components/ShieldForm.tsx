@@ -4,7 +4,7 @@ import { parseUnits, formatUnits, isAddress, encodeFunctionData } from 'viem';
 import {
   generateShieldProof,
   generateRandomness,
-  generateDiversifier,
+  generateRandomPaymentAddress,
   deriveAssetType,
 } from '../lib/prover';
 import type { OutputProofResult } from '../lib/prover';
@@ -113,13 +113,16 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
   const decimals = tokenDecimals ?? 18;
 
-  // Generate random diversifier for the recipient
-  const handleGenerateDiversifier = () => {
+  // Generate a random valid payment address (diversifier + pk_d)
+  const handleGeneratePaymentAddress = () => {
     try {
-      const diversifier = generateDiversifier();
-      setRecipientDiversifier(diversifier);
+      const paymentAddr = generateRandomPaymentAddress();
+      setRecipientDiversifier(paymentAddr.diversifier);
+      setRecipientPkD(paymentAddr.pk_d);
+      setError(null);
     } catch (e) {
-      setError('Failed to generate diversifier: ' + (e instanceof Error ? e.message : String(e)));
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      setError('Failed to generate payment address: ' + errorMsg);
     }
   };
 
@@ -395,7 +398,17 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       // Refetch balance after successful shield
       setTimeout(() => refetchBalance(), 2000);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Shield operation failed';
+      // Handle different error types (Error, string from WASM, or unknown)
+      let errorMessage: string;
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else if (err && typeof err === 'object' && 'message' in err) {
+        errorMessage = String((err as { message: unknown }).message);
+      } else {
+        errorMessage = 'Shield operation failed: ' + String(err);
+      }
       setError(errorMessage);
       setIsGeneratingProof(false);
       console.error('[UI] Shield error:', err);
@@ -482,17 +495,24 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       </div>
 
       <div className="form-group">
-        <label htmlFor="recipientDiversifier">
-          Recipient Diversifier
+        <label htmlFor="recipientAddress">
+          Recipient Payment Address
           <button
             type="button"
             className="btn small secondary"
-            onClick={handleGenerateDiversifier}
+            onClick={handleGeneratePaymentAddress}
             style={{ marginLeft: '10px' }}
           >
-            Generate Random
+            Generate Random Address
           </button>
         </label>
+        <span className="form-hint" style={{ marginBottom: '8px', display: 'block' }}>
+          Click "Generate Random Address" to create a valid payment address for testing, or enter your own diversifier and pk_d below.
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="recipientDiversifier">Diversifier (11 bytes)</label>
         <input
           id="recipientDiversifier"
           type="text"
@@ -500,13 +520,10 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
           value={recipientDiversifier}
           onChange={(e) => setRecipientDiversifier(e.target.value)}
         />
-        <span className="form-hint">
-          The diversifier for the payment address (11 bytes).
-        </span>
       </div>
 
       <div className="form-group">
-        <label htmlFor="recipientPkD">Recipient pk_d (Diversified Transmission Key)</label>
+        <label htmlFor="recipientPkD">pk_d - Diversified Transmission Key (32 bytes)</label>
         <input
           id="recipientPkD"
           type="text"
@@ -514,9 +531,6 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
           value={recipientPkD}
           onChange={(e) => setRecipientPkD(e.target.value)}
         />
-        <span className="form-hint">
-          The diversified transmission key component of the payment address (32 bytes).
-        </span>
       </div>
 
       {/* Validation Warnings */}
