@@ -523,17 +523,70 @@ fn scalar_to_hex(s: &Scalar) -> String {
     hex::encode(be_bytes)
 }
 
+// ============================================================================
+// EIP-2537 Point Encoding
+// EIP-2537 expects points in uncompressed format with specific padding:
+// - G1: 128 bytes (x: 64 bytes, y: 64 bytes) - 16 zero bytes + 48 byte coordinate
+// - G2: 256 bytes (x: 128 bytes, y: 128 bytes) - x and y are Fp2 = (c0, c1)
+// ============================================================================
+
+/// Encode G1 point to EIP-2537 format (128 bytes)
+fn g1_to_eip2537(point: &bls12_381::G1Affine) -> Vec<u8> {
+    let uncompressed = point.to_uncompressed();
+    // bls12_381 to_uncompressed: 96 bytes = x (48 bytes) || y (48 bytes), big-endian
+    let x = &uncompressed[0..48];
+    let y = &uncompressed[48..96];
+
+    let mut result = Vec::with_capacity(128);
+    // Pad x to 64 bytes (16 zeros + 48 byte coordinate)
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x);
+    // Pad y to 64 bytes (16 zeros + 48 byte coordinate)
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y);
+
+    result
+}
+
+/// Encode G2 point to EIP-2537 format (256 bytes)
+fn g2_to_eip2537(point: &bls12_381::G2Affine) -> Vec<u8> {
+    let uncompressed = point.to_uncompressed();
+    // bls12_381 to_uncompressed: 192 bytes
+    // Format: x.c1 (48) || x.c0 (48) || y.c1 (48) || y.c0 (48)
+    // EIP-2537 expects: x.c0 (64) || x.c1 (64) || y.c0 (64) || y.c1 (64)
+    let x_c1 = &uncompressed[0..48];
+    let x_c0 = &uncompressed[48..96];
+    let y_c1 = &uncompressed[96..144];
+    let y_c0 = &uncompressed[144..192];
+
+    let mut result = Vec::with_capacity(256);
+    // x.c0 padded to 64 bytes
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x_c0);
+    // x.c1 padded to 64 bytes
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x_c1);
+    // y.c0 padded to 64 bytes
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y_c0);
+    // y.c1 padded to 64 bytes
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y_c1);
+
+    result
+}
+
+/// Encode proof to EIP-2537 format (512 bytes: A || B || C)
+fn proof_to_eip2537(proof: &Proof<Bls12>) -> Vec<u8> {
+    let mut result = Vec::with_capacity(512);
+    result.extend_from_slice(&g1_to_eip2537(&proof.a));
+    result.extend_from_slice(&g2_to_eip2537(&proof.b));
+    result.extend_from_slice(&g1_to_eip2537(&proof.c));
+    result
+}
+
 fn proof_to_hex(proof: &Proof<Bls12>) -> String {
-    let a_bytes = proof.a.to_compressed();
-    let b_bytes = proof.b.to_compressed();
-    let c_bytes = proof.c.to_compressed();
-
-    let mut result = Vec::with_capacity(48 + 96 + 48);
-    result.extend_from_slice(&a_bytes);
-    result.extend_from_slice(&b_bytes);
-    result.extend_from_slice(&c_bytes);
-
-    hex::encode(result)
+    hex::encode(proof_to_eip2537(proof))
 }
 
 // ============================================================================
@@ -789,22 +842,16 @@ pub struct VerificationKeyData {
     pub ic: Vec<String>,    // Array of G1 points
 }
 
-fn g1_to_uncompressed_hex(point: &bls12_381::G1Affine) -> String {
-    // The contract expects uncompressed format: 128 bytes (x: 64 bytes, y: 64 bytes)
-    // BLS12-381 G1 points have 48-byte coordinates, padded to 64 bytes for EIP-2537
-    let bytes = point.to_uncompressed();
-    hex::encode(bytes)
+fn g1_to_eip2537_hex(point: &bls12_381::G1Affine) -> String {
+    hex::encode(g1_to_eip2537(point))
 }
 
-fn g2_to_uncompressed_hex(point: &bls12_381::G2Affine) -> String {
-    // The contract expects uncompressed format: 256 bytes (x: 128 bytes, y: 128 bytes)
-    // BLS12-381 G2 points have 96-byte coordinates (48 * 2), padded to 128 bytes for EIP-2537
-    let bytes = point.to_uncompressed();
-    hex::encode(bytes)
+fn g2_to_eip2537_hex(point: &bls12_381::G2Affine) -> String {
+    hex::encode(g2_to_eip2537(point))
 }
 
 /// Get the verification key for the Output circuit (used for shielding)
-/// Returns the VK in a format suitable for the MASPVerifier contract
+/// Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
 #[wasm_bindgen]
 pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
     web_sys::console::log_1(&"[MASP] Getting output circuit verification key...".into());
@@ -812,18 +859,18 @@ pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
     let params = get_output_params();
     let vk = &params.vk;
 
-    // Convert VK components to hex strings
-    let alpha_hex = g1_to_uncompressed_hex(&vk.alpha_g1);
-    let beta_hex = g2_to_uncompressed_hex(&vk.beta_g2);
-    let gamma_hex = g2_to_uncompressed_hex(&vk.gamma_g2);
-    let delta_hex = g2_to_uncompressed_hex(&vk.delta_g2);
+    // Convert VK components to EIP-2537 format hex strings
+    let alpha_hex = g1_to_eip2537_hex(&vk.alpha_g1);
+    let beta_hex = g2_to_eip2537_hex(&vk.beta_g2);
+    let gamma_hex = g2_to_eip2537_hex(&vk.gamma_g2);
+    let delta_hex = g2_to_eip2537_hex(&vk.delta_g2);
 
-    // Convert IC points
+    // Convert IC points to EIP-2537 format
     let ic_hex: Vec<String> = vk.ic.iter()
-        .map(|point| g1_to_uncompressed_hex(point))
+        .map(|point| g1_to_eip2537_hex(point))
         .collect();
 
-    web_sys::console::log_1(&format!("[MASP] Output VK: {} IC points", ic_hex.len()).into());
+    web_sys::console::log_1(&format!("[MASP] Output VK: {} IC points, alpha len: {}", ic_hex.len(), alpha_hex.len()).into());
 
     let vk_data = VerificationKeyData {
         alpha: format!("0x{}", alpha_hex),
@@ -837,6 +884,7 @@ pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
 }
 
 /// Get the verification key for the Spend circuit (used for unshielding)
+/// Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
 #[wasm_bindgen]
 pub fn get_spend_verification_key() -> Result<JsValue, JsValue> {
     web_sys::console::log_1(&"[MASP] Getting spend circuit verification key...".into());
@@ -844,18 +892,18 @@ pub fn get_spend_verification_key() -> Result<JsValue, JsValue> {
     let params = get_spend_params();
     let vk = &params.vk;
 
-    // Convert VK components to hex strings
-    let alpha_hex = g1_to_uncompressed_hex(&vk.alpha_g1);
-    let beta_hex = g2_to_uncompressed_hex(&vk.beta_g2);
-    let gamma_hex = g2_to_uncompressed_hex(&vk.gamma_g2);
-    let delta_hex = g2_to_uncompressed_hex(&vk.delta_g2);
+    // Convert VK components to EIP-2537 format hex strings
+    let alpha_hex = g1_to_eip2537_hex(&vk.alpha_g1);
+    let beta_hex = g2_to_eip2537_hex(&vk.beta_g2);
+    let gamma_hex = g2_to_eip2537_hex(&vk.gamma_g2);
+    let delta_hex = g2_to_eip2537_hex(&vk.delta_g2);
 
-    // Convert IC points
+    // Convert IC points to EIP-2537 format
     let ic_hex: Vec<String> = vk.ic.iter()
-        .map(|point| g1_to_uncompressed_hex(point))
+        .map(|point| g1_to_eip2537_hex(point))
         .collect();
 
-    web_sys::console::log_1(&format!("[MASP] Spend VK: {} IC points", ic_hex.len()).into());
+    web_sys::console::log_1(&format!("[MASP] Spend VK: {} IC points, alpha len: {}", ic_hex.len(), alpha_hex.len()).into());
 
     let vk_data = VerificationKeyData {
         alpha: format!("0x{}", alpha_hex),

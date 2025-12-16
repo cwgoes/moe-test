@@ -236,7 +236,7 @@ export function get_masp_info() {
 
 /**
  * Get the verification key for the Output circuit (used for shielding)
- * Returns the VK in a format suitable for the MASPVerifier contract
+ * Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
  * @returns {any}
  */
 export function get_output_verification_key() {
@@ -249,6 +249,7 @@ export function get_output_verification_key() {
 
 /**
  * Get the verification key for the Spend circuit (used for unshielding)
+ * Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
  * @returns {any}
  */
 export function get_spend_verification_key() {
