@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
-import { parseUnits, isAddress } from 'viem';
-import { generateUnshieldProof } from '../lib/prover';
+import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi';
+import { parseUnits, isAddress, encodeFunctionData } from 'viem';
+import {
+  generateUnshieldProof,
+  generateRandomness,
+  deriveAssetType,
+} from '../lib/prover';
+import type { SpendProofResult, MerkleNode } from '../lib/prover';
 import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 
 interface UnshieldFormProps {
@@ -10,22 +15,35 @@ interface UnshieldFormProps {
   onSuccess?: () => void;
 }
 
+type SimulationStatus = 'idle' | 'simulating' | 'success' | 'error';
+
 export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldFormProps) {
   const { address } = useAccount();
   const { writeContractAsync, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+  const publicClient = usePublicClient();
 
   const [tokenAddress, setTokenAddress] = useState<string>(defaultToken);
   const [amount, setAmount] = useState('');
   const [recipient, setRecipient] = useState('');
-  const [spendKey, setSpendKey] = useState('');
-  const [noteCommitment, setNoteCommitment] = useState('');
+
+  // MASP-specific inputs
+  const [proofGenerationKeyAk, setProofGenerationKeyAk] = useState('');
+  const [proofGenerationKeyNsk, setProofGenerationKeyNsk] = useState('');
+  const [diversifier, setDiversifier] = useState('');
+  const [rcm, setRcm] = useState('');
+  const [merklePathJson, setMerklePathJson] = useState('');
+
   const [isGeneratingProof, setIsGeneratingProof] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proofGenerated, setProofGenerated] = useState(false);
   const [proofTime, setProofTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Simulation state
+  const [simulationStatus, setSimulationStatus] = useState<SimulationStatus>('idle');
+  const [simulationError, setSimulationError] = useState<string | null>(null);
 
   const maspPoolAddress = poolAddress;
 
@@ -86,36 +104,131 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
 
   const decimals = tokenDecimals ?? 18;
 
+  // Parse merkle path from JSON
+  const parseMerklePath = (json: string): MerkleNode[] => {
+    try {
+      const parsed = JSON.parse(json);
+      if (!Array.isArray(parsed)) {
+        throw new Error('Merkle path must be an array');
+      }
+      return parsed.map((node: { hash: string; is_right: boolean }) => ({
+        hash: node.hash,
+        is_right: node.is_right,
+      }));
+    } catch (e) {
+      throw new Error('Invalid merkle path JSON: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  // Simulate the unshield transaction
+  const simulateTransaction = async (
+    proofBytes: `0x${string}`,
+    publicInputs: `0x${string}`[],
+    amountBigInt: bigint,
+    recipientAddr: `0x${string}`
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!publicClient || !maspPoolAddress || !address) {
+      return { success: false, error: 'Client not ready' };
+    }
+
+    const SIMULATION_TIMEOUT = 15000;
+
+    try {
+      const data = encodeFunctionData({
+        abi: MASP_POOL_ABI,
+        functionName: 'unshield',
+        args: [tokenAddress as `0x${string}`, amountBigInt, recipientAddr, proofBytes, publicInputs],
+      });
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Simulation timed out after 15 seconds.')), SIMULATION_TIMEOUT);
+      });
+
+      await Promise.race([
+        publicClient.call({
+          account: address,
+          to: maspPoolAddress,
+          data,
+        }),
+        timeoutPromise,
+      ]);
+
+      return { success: true };
+    } catch (err) {
+      const errorStr = err instanceof Error ? err.message : String(err);
+
+      if (errorStr.includes('InvalidProof')) {
+        return { success: false, error: 'Proof verification failed. Invalid spend proof.' };
+      }
+      if (errorStr.includes('NullifierAlreadySpent')) {
+        return { success: false, error: 'Nullifier already spent. These tokens have been withdrawn.' };
+      }
+      if (errorStr.includes('InvalidMerkleRoot')) {
+        return { success: false, error: 'Invalid merkle root. The anchor is not a valid historical root.' };
+      }
+      if (errorStr.includes('Invalid public inputs')) {
+        return { success: false, error: 'Invalid public inputs. Expected 7 inputs for Spend circuit.' };
+      }
+
+      return { success: false, error: `Simulation failed: ${errorStr.slice(0, 200)}` };
+    }
+  };
+
   const handleUnshield = async () => {
-    if (!maspPoolAddress || !isAddress(tokenAddress) || !recipient || !spendKey || !merkleRoot) return;
+    if (!maspPoolAddress || !isAddress(tokenAddress) || !recipient || !merkleRoot) return;
+    if (!proofGenerationKeyAk || !proofGenerationKeyNsk || !diversifier || !rcm) return;
 
     setError(null);
+    setSimulationError(null);
     setIsGeneratingProof(true);
     setProofGenerated(false);
     setProofTime(null);
     setElapsedTime(0);
+    setSimulationStatus('idle');
 
     const startTime = Date.now();
 
     try {
       const amountBigInt = parseUnits(amount, decimals);
 
-      console.log('[UI] Starting unshield proof generation...');
+      // Parse merkle path
+      let merklePath: MerkleNode[] = [];
+      if (merklePathJson.trim()) {
+        merklePath = parseMerklePath(merklePathJson);
+      }
 
-      // Generate the unshield proof
-      const proofResult = await generateUnshieldProof({
-        nullifier: noteCommitment, // Use note commitment to derive nullifier
-        merkle_root: merkleRoot as string,
-        merkle_path: [], // Simplified - real implementation needs actual path
-        note_commitment: noteCommitment,
+      // Generate randomness values
+      const ar = generateRandomness();  // Re-randomization scalar
+      const rcv = generateRandomness(); // Value commitment randomness
+
+      // Derive asset type from token address
+      const assetType = deriveAssetType(tokenAddress);
+
+      console.log('[UI] Starting Spend proof generation (real MASP)...');
+      console.log('[UI] Token:', tokenAddress);
+      console.log('[UI] Asset Type:', assetType);
+      console.log('[UI] Amount:', amountBigInt.toString());
+      console.log('[UI] Anchor (merkle root):', merkleRoot);
+      console.log('[UI] Merkle path length:', merklePath.length);
+
+      // Generate the unshield proof using real MASP Spend circuit
+      const proofResult: SpendProofResult = await generateUnshieldProof({
         amount: '0x' + amountBigInt.toString(16),
-        recipient: recipient,
-        spend_key: spendKey,
+        asset_type: assetType,
+        proof_generation_key_ak: proofGenerationKeyAk,
+        proof_generation_key_nsk: proofGenerationKeyNsk,
+        diversifier: diversifier,
+        rcm: rcm,
+        ar: ar,
+        anchor: merkleRoot as string,
+        merkle_path: merklePath,
+        rcv: rcv,
       });
 
       const elapsed = Date.now() - startTime;
       setProofTime(elapsed);
-      console.log(`[UI] Unshield proof generation completed in ${elapsed}ms`);
+      console.log(`[UI] Spend proof generation completed in ${elapsed}ms`);
+      console.log('[UI] Proof result:', proofResult);
 
       if (!proofResult.success) {
         throw new Error(proofResult.error || 'Proof generation failed');
@@ -125,13 +238,45 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
       setIsGeneratingProof(false);
 
       // Convert proof to bytes
-      const proofBytes = ('0x' + proofResult.proof) as `0x${string}`;
+      const proofBytes = proofResult.proof.startsWith('0x')
+        ? proofResult.proof as `0x${string}`
+        : ('0x' + proofResult.proof) as `0x${string}`;
 
-      // Convert public inputs to bytes32 array
-      const publicInputs = proofResult.public_inputs.map((input) => {
-        const hex = input.startsWith('0x') ? input.slice(2) : input;
-        return ('0x' + hex.padStart(64, '0')) as `0x${string}`;
-      });
+      // Build public inputs array for MASP Spend circuit (7 inputs)
+      // Order: rk.u, rk.v, cv.u, cv.v, anchor, nf[0], nf[1]
+      const publicInputs: `0x${string}`[] = [
+        formatBytes32(proofResult.rk_u),
+        formatBytes32(proofResult.rk_v),
+        formatBytes32(proofResult.cv_u),
+        formatBytes32(proofResult.cv_v),
+        formatBytes32(proofResult.anchor),
+        formatBytes32(proofResult.nf_0),
+        formatBytes32(proofResult.nf_1),
+      ];
+
+      console.log('[UI] Proof bytes length:', proofBytes.length);
+      console.log('[UI] Public inputs (7 for Spend):', publicInputs);
+
+      // Simulate the transaction before sending
+      setSimulationStatus('simulating');
+      console.log('[UI] Simulating transaction...');
+
+      const simResult = await simulateTransaction(
+        proofBytes,
+        publicInputs,
+        amountBigInt,
+        recipient as `0x${string}`
+      );
+
+      if (!simResult.success) {
+        setSimulationStatus('error');
+        setSimulationError(simResult.error || 'Simulation failed');
+        console.error('[UI] Simulation failed:', simResult.error);
+        throw new Error(simResult.error || 'Transaction simulation failed');
+      }
+
+      setSimulationStatus('success');
+      console.log('[UI] Simulation successful, submitting transaction...');
 
       // Submit the unshield transaction
       await writeContractAsync({
@@ -147,9 +292,17 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
         ],
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unshield operation failed');
+      const errorMessage = err instanceof Error ? err.message : 'Unshield operation failed';
+      setError(errorMessage);
       setIsGeneratingProof(false);
+      console.error('[UI] Unshield error:', err);
     }
+  };
+
+  // Helper to format a hex string as bytes32
+  const formatBytes32 = (input: string): `0x${string}` => {
+    const hex = input.startsWith('0x') ? input.slice(2) : input;
+    return ('0x' + hex.padStart(64, '0')) as `0x${string}`;
   };
 
   // Pre-fill recipient with connected wallet address
@@ -163,10 +316,14 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
     isAddress(tokenAddress) &&
     amount &&
     isAddress(recipient) &&
-    spendKey &&
-    noteCommitment &&
+    proofGenerationKeyAk &&
+    proofGenerationKeyNsk &&
+    diversifier &&
+    rcm &&
+    merkleRoot &&
     !isPending &&
-    !isGeneratingProof;
+    !isGeneratingProof &&
+    !!maspPoolAddress;
 
   const formatTime = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
@@ -177,7 +334,8 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
     <div className="form-container">
       <h2>Unshield Tokens</h2>
       <p className="form-description">
-        Withdraw tokens from the shielded pool. You need the spend key and note commitment from when you shielded the tokens.
+        Withdraw tokens from the shielded pool using the Namada MASP Spend circuit.
+        You need the proof generation key and note details from when you shielded the tokens.
       </p>
 
       <div className="form-group">
@@ -219,37 +377,81 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
         </div>
       </div>
 
+      <h3 className="section-title">Note Details</h3>
+
       <div className="form-group">
-        <label htmlFor="noteCommitment">Note Commitment</label>
+        <label htmlFor="proofGenKeyAk">Proof Generation Key (ak)</label>
         <input
-          id="noteCommitment"
-          type="text"
-          placeholder="0x..."
-          value={noteCommitment}
-          onChange={(e) => setNoteCommitment(e.target.value)}
+          id="proofGenKeyAk"
+          type="password"
+          placeholder="0x... (32 bytes)"
+          value={proofGenerationKeyAk}
+          onChange={(e) => setProofGenerationKeyAk(e.target.value)}
         />
-        <span className="form-hint">
-          The note commitment from the Shield event when you deposited.
+        <span className="form-hint warning">
+          Secret key component - keep private!
         </span>
       </div>
 
       <div className="form-group">
-        <label htmlFor="spendKey">Spend Key (Private)</label>
+        <label htmlFor="proofGenKeyNsk">Proof Generation Key (nsk)</label>
         <input
-          id="spendKey"
+          id="proofGenKeyNsk"
           type="password"
-          placeholder="0x..."
-          value={spendKey}
-          onChange={(e) => setSpendKey(e.target.value)}
+          placeholder="0x... (32 bytes)"
+          value={proofGenerationKeyNsk}
+          onChange={(e) => setProofGenerationKeyNsk(e.target.value)}
         />
         <span className="form-hint warning">
-          Keep this secret! This key proves ownership of the shielded tokens.
+          Secret key component - keep private!
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="diversifier">Diversifier</label>
+        <input
+          id="diversifier"
+          type="text"
+          placeholder="0x... (11 bytes)"
+          value={diversifier}
+          onChange={(e) => setDiversifier(e.target.value)}
+        />
+        <span className="form-hint">
+          The diversifier from the payment address used when shielding.
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="rcm">Note Commitment Randomness (rcm)</label>
+        <input
+          id="rcm"
+          type="text"
+          placeholder="0x... (32 bytes)"
+          value={rcm}
+          onChange={(e) => setRcm(e.target.value)}
+        />
+        <span className="form-hint">
+          The randomness used to create the note commitment when shielding.
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="merklePath">Merkle Path (JSON)</label>
+        <textarea
+          id="merklePath"
+          placeholder='[{"hash": "0x...", "is_right": true}, ...]'
+          value={merklePathJson}
+          onChange={(e) => setMerklePathJson(e.target.value)}
+          rows={3}
+        />
+        <span className="form-hint">
+          JSON array of merkle path nodes. Each node has "hash" (bytes32) and "is_right" (boolean).
         </span>
       </div>
 
       {merkleRoot && (
         <div className="info-box">
-          <strong>Current Merkle Root:</strong>
+          <strong>Current Merkle Root (Anchor):</strong>
           <code>{(merkleRoot as string).slice(0, 18)}...</code>
         </div>
       )}
@@ -266,12 +468,33 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
         <div className="proof-progress">
           <div className="proof-spinner"></div>
           <div className="proof-progress-text">
-            <span>Generating zk-SNARK proof...</span>
+            <span>Generating MASP Spend proof...</span>
             <span className="proof-timer">{formatTime(elapsedTime)}</span>
           </div>
           <div className="proof-progress-bar">
             <div className="proof-progress-bar-inner"></div>
           </div>
+        </div>
+      )}
+
+      {/* Simulation Status */}
+      {simulationStatus === 'simulating' && (
+        <div className="simulation-status simulating">
+          <div className="simulation-spinner"></div>
+          <span>Simulating transaction...</span>
+        </div>
+      )}
+
+      {simulationStatus === 'success' && (
+        <div className="simulation-status success">
+          <span>Transaction simulation passed</span>
+        </div>
+      )}
+
+      {simulationStatus === 'error' && simulationError && (
+        <div className="simulation-status error">
+          <strong>Simulation failed:</strong>
+          <p>{simulationError}</p>
         </div>
       )}
 
@@ -283,6 +506,8 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
         >
           {isGeneratingProof
             ? 'Generating Proof...'
+            : simulationStatus === 'simulating'
+            ? 'Simulating...'
             : isPending
             ? 'Confirming...'
             : isConfirming
@@ -293,7 +518,7 @@ export function UnshieldForm({ defaultToken, poolAddress, onSuccess }: UnshieldF
 
       {proofGenerated && proofTime !== null && (
         <div className="proof-status">
-          Proof generated in {formatTime(proofTime)} (BLS12-381 Groth16, ~512 bytes)
+          MASP Spend proof generated in {formatTime(proofTime)} (BLS12-381 Groth16, 7 public inputs)
         </div>
       )}
 

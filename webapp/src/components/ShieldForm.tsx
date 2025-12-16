@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi';
 import { parseUnits, formatUnits, isAddress, encodeFunctionData } from 'viem';
-import { generateShieldProof, generateRandomness } from '../lib/prover';
+import {
+  generateShieldProof,
+  generateRandomness,
+  generateDiversifier,
+  deriveAssetType,
+} from '../lib/prover';
+import type { OutputProofResult } from '../lib/prover';
 import { MASP_POOL_ABI, ERC20_ABI } from '../lib/contracts';
 
 interface ShieldFormProps {
@@ -26,7 +32,8 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
   const [tokenAddress, setTokenAddress] = useState<string>(defaultToken);
   const [amount, setAmount] = useState('');
-  const [recipientPk, setRecipientPk] = useState('');
+  const [recipientDiversifier, setRecipientDiversifier] = useState('');
+  const [recipientPkD, setRecipientPkD] = useState('');
   const [isGeneratingProof, setIsGeneratingProof] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proofGenerated, setProofGenerated] = useState(false);
@@ -106,6 +113,16 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
   const decimals = tokenDecimals ?? 18;
 
+  // Generate random diversifier for the recipient
+  const handleGenerateDiversifier = () => {
+    try {
+      const diversifier = generateDiversifier();
+      setRecipientDiversifier(diversifier);
+    } catch (e) {
+      setError('Failed to generate diversifier: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
   // Validate inputs and check for potential issues
   const validateInputs = useCallback((): ValidationResult => {
     const errors: string[] = [];
@@ -142,11 +159,18 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       }
     }
 
-    // Check recipient public key
-    if (!recipientPk) {
-      errors.push('Recipient public key is required');
-    } else if (!recipientPk.startsWith('0x')) {
-      warnings.push('Public key should start with 0x');
+    // Check recipient diversifier
+    if (!recipientDiversifier) {
+      errors.push('Recipient diversifier is required');
+    } else if (!recipientDiversifier.startsWith('0x') || recipientDiversifier.length !== 24) { // 11 bytes = 22 hex + 0x
+      warnings.push('Diversifier should be 11 bytes (0x + 22 hex chars)');
+    }
+
+    // Check recipient pk_d
+    if (!recipientPkD) {
+      errors.push('Recipient pk_d is required');
+    } else if (!recipientPkD.startsWith('0x') || recipientPkD.length !== 66) { // 32 bytes = 64 hex + 0x
+      warnings.push('pk_d should be 32 bytes (0x + 64 hex chars)');
     }
 
     return {
@@ -154,17 +178,17 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       errors,
       warnings,
     };
-  }, [maspPoolAddress, tokenAddress, amount, decimals, tokenBalance, tokenSymbol, allowance, recipientPk]);
+  }, [maspPoolAddress, tokenAddress, amount, decimals, tokenBalance, tokenSymbol, allowance, recipientDiversifier, recipientPkD]);
 
   // Update validation when inputs change
   useEffect(() => {
-    if (amount && recipientPk && isAddress(tokenAddress)) {
+    if (amount && recipientDiversifier && recipientPkD && isAddress(tokenAddress)) {
       const result = validateInputs();
       setValidation(result);
     } else {
       setValidation({ valid: true, errors: [], warnings: [] });
     }
-  }, [amount, recipientPk, tokenAddress, tokenBalance, allowance, validateInputs]);
+  }, [amount, recipientDiversifier, recipientPkD, tokenAddress, tokenBalance, allowance, validateInputs]);
 
   // Simulate the shield transaction with timeout
   const simulateTransaction = async (
@@ -225,7 +249,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       return 'Token transfer failed. Check your balance and approval.';
     }
     if (errorStr.includes('Invalid public inputs')) {
-      return 'Invalid public inputs. Expected 2 inputs: [valueCommitment, noteCommitment].';
+      return 'Invalid public inputs. Expected 5 inputs: [cv.u, cv.v, epk.u, epk.v, cm].';
     }
     if (errorStr.includes('ERC20: transfer amount exceeds balance')) {
       return 'Insufficient token balance for this transfer.';
@@ -265,7 +289,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
   };
 
   const handleShield = async () => {
-    if (!maspPoolAddress || !isAddress(tokenAddress) || !recipientPk) return;
+    if (!maspPoolAddress || !isAddress(tokenAddress) || !recipientDiversifier || !recipientPkD) return;
 
     // Pre-flight validation
     const validationResult = validateInputs();
@@ -286,19 +310,32 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
     try {
       const amountBigInt = parseUnits(amount, decimals);
-      const randomness = generateRandomness();
 
-      console.log('[UI] Starting proof generation...');
+      // Generate randomness values for the proof
+      const rcm = generateRandomness();  // Note commitment randomness
+      const esk = generateRandomness();  // Ephemeral secret key
+      const rcv = generateRandomness();  // Value commitment randomness
+
+      // Derive asset type from token address
+      const assetType = deriveAssetType(tokenAddress);
+
+      console.log('[UI] Starting Output proof generation (real MASP)...');
       console.log('[UI] Token:', tokenAddress);
+      console.log('[UI] Asset Type:', assetType);
       console.log('[UI] Amount:', amountBigInt.toString());
-      console.log('[UI] Recipient PK:', recipientPk);
+      console.log('[UI] Diversifier:', recipientDiversifier);
+      console.log('[UI] pk_d:', recipientPkD);
 
-      // Generate the shield proof
-      const proofResult = await generateShieldProof({
+      // Generate the shield proof using real MASP Output circuit
+      const proofResult: OutputProofResult = await generateShieldProof({
         token_address: tokenAddress,
         amount: '0x' + amountBigInt.toString(16),
-        recipient_pk: recipientPk,
-        randomness: randomness,
+        asset_type: assetType,
+        recipient_diversifier: recipientDiversifier,
+        recipient_pk_d: recipientPkD,
+        rcm: rcm,
+        esk: esk,
+        rcv: rcv,
       });
 
       const elapsed = Date.now() - startTime;
@@ -310,26 +347,26 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
         throw new Error(proofResult.error || 'Proof generation failed');
       }
 
-      // Validate public inputs count
-      if (proofResult.public_inputs.length !== 2) {
-        throw new Error(`Expected 2 public inputs, got ${proofResult.public_inputs.length}. The shield circuit requires [valueCommitment, noteCommitment].`);
-      }
-
       setProofGenerated(true);
       setIsGeneratingProof(false);
 
       // Convert proof to bytes
-      const proofBytes = ('0x' + proofResult.proof) as `0x${string}`;
+      const proofBytes = proofResult.proof.startsWith('0x')
+        ? proofResult.proof as `0x${string}`
+        : ('0x' + proofResult.proof) as `0x${string}`;
 
-      // Convert public inputs to bytes32 array
-      const publicInputs = proofResult.public_inputs.map((input) => {
-        // Ensure each input is properly formatted as bytes32
-        const hex = input.startsWith('0x') ? input.slice(2) : input;
-        return ('0x' + hex.padStart(64, '0')) as `0x${string}`;
-      });
+      // Build public inputs array for MASP Output circuit (5 inputs)
+      // Order: cv.u, cv.v, epk.u, epk.v, cm
+      const publicInputs: `0x${string}`[] = [
+        formatBytes32(proofResult.cv_u),
+        formatBytes32(proofResult.cv_v),
+        formatBytes32(proofResult.epk_u),
+        formatBytes32(proofResult.epk_v),
+        formatBytes32(proofResult.cm),
+      ];
 
       console.log('[UI] Proof bytes length:', proofBytes.length);
-      console.log('[UI] Public inputs:', publicInputs);
+      console.log('[UI] Public inputs (5 for Output):', publicInputs);
 
       // Simulate the transaction before sending
       setSimulationStatus('simulating');
@@ -365,6 +402,12 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
     }
   };
 
+  // Helper to format a hex string as bytes32
+  const formatBytes32 = (input: string): `0x${string}` => {
+    const hex = input.startsWith('0x') ? input.slice(2) : input;
+    return ('0x' + hex.padStart(64, '0')) as `0x${string}`;
+  };
+
   const needsApproval = (() => {
     if (!amount || allowance === undefined) return false;
     try {
@@ -385,7 +428,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
     }
   })();
 
-  const canShield = !needsApproval && !insufficientBalance && isAddress(tokenAddress) && amount && recipientPk && !isPending && !isGeneratingProof && !!maspPoolAddress;
+  const canShield = !needsApproval && !insufficientBalance && isAddress(tokenAddress) && amount && recipientDiversifier && recipientPkD && !isPending && !isGeneratingProof && !!maspPoolAddress;
 
   const formatTime = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
@@ -396,7 +439,8 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
     <div className="form-container">
       <h2>Shield Tokens</h2>
       <p className="form-description">
-        Deposit ERC20 tokens into the shielded pool. Your tokens will be privately held and can be withdrawn later with a valid proof.
+        Deposit ERC20 tokens into the shielded pool using the Namada MASP Output circuit.
+        Your tokens will be privately held and can be withdrawn later with a valid spend proof.
       </p>
 
       <div className="form-group">
@@ -438,16 +482,40 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
       </div>
 
       <div className="form-group">
-        <label htmlFor="recipientPk">Recipient Public Key (Viewing Key)</label>
+        <label htmlFor="recipientDiversifier">
+          Recipient Diversifier
+          <button
+            type="button"
+            className="btn small secondary"
+            onClick={handleGenerateDiversifier}
+            style={{ marginLeft: '10px' }}
+          >
+            Generate Random
+          </button>
+        </label>
         <input
-          id="recipientPk"
+          id="recipientDiversifier"
           type="text"
-          placeholder="0x..."
-          value={recipientPk}
-          onChange={(e) => setRecipientPk(e.target.value)}
+          placeholder="0x... (11 bytes)"
+          value={recipientDiversifier}
+          onChange={(e) => setRecipientDiversifier(e.target.value)}
         />
         <span className="form-hint">
-          This is the public key that will be able to view and spend the shielded tokens.
+          The diversifier for the payment address (11 bytes).
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="recipientPkD">Recipient pk_d (Diversified Transmission Key)</label>
+        <input
+          id="recipientPkD"
+          type="text"
+          placeholder="0x... (32 bytes)"
+          value={recipientPkD}
+          onChange={(e) => setRecipientPkD(e.target.value)}
+        />
+        <span className="form-hint">
+          The diversified transmission key component of the payment address (32 bytes).
         </span>
       </div>
 
@@ -484,7 +552,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
         <div className="proof-progress">
           <div className="proof-spinner"></div>
           <div className="proof-progress-text">
-            <span>Generating zk-SNARK proof...</span>
+            <span>Generating MASP Output proof...</span>
             <span className="proof-timer">{formatTime(elapsedTime)}</span>
           </div>
           <div className="proof-progress-bar">
@@ -546,7 +614,7 @@ export function ShieldForm({ defaultToken, poolAddress, onSuccess }: ShieldFormP
 
       {proofGenerated && proofTime !== null && (
         <div className="proof-status">
-          Proof generated in {formatTime(proofTime)} (BLS12-381 Groth16, ~512 bytes)
+          MASP Output proof generated in {formatTime(proofTime)} (BLS12-381 Groth16, 5 public inputs)
         </div>
       )}
 

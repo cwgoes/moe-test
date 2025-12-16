@@ -170,31 +170,40 @@ contract MASPVerifier {
     }
 
     /// @notice Verifies a Spend proof with structured inputs
-    /// @dev Spend circuit public inputs typically include:
-    ///      - Merkle root (anchor)
-    ///      - Value commitment
-    ///      - Nullifier
-    ///      - Randomized verification key
+    /// @dev Namada MASP Spend circuit public inputs (7 total):
+    ///      - rk.u, rk.v (re-randomized verification key coordinates)
+    ///      - cv.u, cv.v (value commitment coordinates)
+    ///      - anchor (Merkle root)
+    ///      - nf[0], nf[1] (nullifier packed into 2 field elements)
     /// @param proof The Groth16 proof
+    /// @param rkU Re-randomized key u-coordinate
+    /// @param rkV Re-randomized key v-coordinate
+    /// @param cvU Value commitment u-coordinate
+    /// @param cvV Value commitment v-coordinate
     /// @param anchor The Merkle tree root
-    /// @param valueCommitment The value commitment
-    /// @param nullifier The nullifier
-    /// @param rvk The randomized verification key
+    /// @param nf0 First nullifier field element
+    /// @param nf1 Second nullifier field element
     /// @return success True if the proof is valid
     function verifySpendProof(
         bytes calldata proof,
+        bytes32 rkU,
+        bytes32 rkV,
+        bytes32 cvU,
+        bytes32 cvV,
         bytes32 anchor,
-        bytes32 valueCommitment,
-        bytes32 nullifier,
-        bytes32 rvk
+        bytes32 nf0,
+        bytes32 nf1
     ) external view returns (bool success) {
         if (!isInitialized[CircuitType.Spend]) revert VerificationKeyNotInitialized();
 
-        bytes32[] memory publicInputs = new bytes32[](4);
-        publicInputs[0] = anchor;
-        publicInputs[1] = valueCommitment;
-        publicInputs[2] = nullifier;
-        publicInputs[3] = rvk;
+        bytes32[] memory publicInputs = new bytes32[](7);
+        publicInputs[0] = rkU;
+        publicInputs[1] = rkV;
+        publicInputs[2] = cvU;
+        publicInputs[3] = cvV;
+        publicInputs[4] = anchor;
+        publicInputs[5] = nf0;
+        publicInputs[6] = nf1;
 
         Groth16Verifier.Proof memory decodedProof = Groth16Verifier.decodeProof(proof);
         Groth16Verifier.VerifyingKey memory vk = _getVerifyingKey(CircuitType.Spend);
@@ -203,27 +212,33 @@ contract MASPVerifier {
     }
 
     /// @notice Verifies an Output proof with structured inputs
-    /// @dev Output circuit public inputs typically include:
-    ///      - Value commitment
-    ///      - Note commitment
-    ///      - Ephemeral public key
+    /// @dev Namada MASP Output circuit public inputs (5 total):
+    ///      - cv.u, cv.v (value commitment coordinates)
+    ///      - epk.u, epk.v (ephemeral public key coordinates)
+    ///      - cm (note commitment)
     /// @param proof The Groth16 proof
-    /// @param valueCommitment The value commitment
-    /// @param noteCommitment The note commitment
-    /// @param epk The ephemeral public key
+    /// @param cvU Value commitment u-coordinate
+    /// @param cvV Value commitment v-coordinate
+    /// @param epkU Ephemeral public key u-coordinate
+    /// @param epkV Ephemeral public key v-coordinate
+    /// @param cm Note commitment
     /// @return success True if the proof is valid
     function verifyOutputProof(
         bytes calldata proof,
-        bytes32 valueCommitment,
-        bytes32 noteCommitment,
-        bytes32 epk
+        bytes32 cvU,
+        bytes32 cvV,
+        bytes32 epkU,
+        bytes32 epkV,
+        bytes32 cm
     ) external view returns (bool success) {
         if (!isInitialized[CircuitType.Output]) revert VerificationKeyNotInitialized();
 
-        bytes32[] memory publicInputs = new bytes32[](3);
-        publicInputs[0] = valueCommitment;
-        publicInputs[1] = noteCommitment;
-        publicInputs[2] = epk;
+        bytes32[] memory publicInputs = new bytes32[](5);
+        publicInputs[0] = cvU;
+        publicInputs[1] = cvV;
+        publicInputs[2] = epkU;
+        publicInputs[3] = epkV;
+        publicInputs[4] = cm;
 
         Groth16Verifier.Proof memory decodedProof = Groth16Verifier.decodeProof(proof);
         Groth16Verifier.VerifyingKey memory vk = _getVerifyingKey(CircuitType.Output);

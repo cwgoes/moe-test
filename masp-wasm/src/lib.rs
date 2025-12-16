@@ -1,35 +1,38 @@
 //! MASP WASM Prover
 //!
-//! This crate provides WebAssembly bindings for generating MASP proofs
+//! This crate provides WebAssembly bindings for generating real Namada MASP proofs
 //! in web browsers using BLS12-381 curve and Groth16 proving system.
 //!
-//! The implementation uses Namada's masp_primitives for proper MASP data structures
-//! (notes, commitments, keys) while using a simplified bellman-based proving system
-//! suitable for browser environments without requiring large parameter file downloads.
+//! The implementation uses Namada's masp_proofs crate for actual MASP circuits
+//! with parameters from the Namada trusted setup.
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
-use bellman::groth16::{
-    create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof, Proof,
-    Parameters,
-};
-use bellman::{Circuit, ConstraintSystem, SynthesisError, Variable};
-use bls12_381::{Bls12, Scalar};
-use ff::Field;
-use rand_core::OsRng;
+use std::io::Cursor;
+use std::sync::Mutex;
 
-// Re-export masp_primitives types for reference
+// Use types re-exported from masp_proofs to ensure compatibility
+use masp_proofs::bellman::groth16::{
+    prepare_verifying_key, verify_proof, Proof, Parameters, PreparedVerifyingKey,
+    create_random_proof,
+};
+use masp_proofs::bls12_381::Bls12;
+use masp_proofs::group::Curve;
+use masp_proofs::group::ff::Field;
+use masp_proofs::jubjub;
+
+// Re-export masp_primitives types
 pub use masp_primitives::sapling::{
-    Note, NoteValue, PaymentAddress, Nullifier, Diversifier,
+    Note, PaymentAddress, Nullifier, Diversifier, ProofGenerationKey, Rseed,
+    ValueCommitment,
 };
 pub use masp_primitives::asset_type::AssetType;
+pub use masp_primitives::merkle_tree::MerklePath;
 
-// Merkle tree depth - results in 2^MERKLE_DEPTH leaves
-const MERKLE_DEPTH: usize = 16;
+// MASP circuit types
+use masp_proofs::circuit::sapling::{Output as OutputCircuit, Spend as SpendCircuit};
 
-// Number of rounds for MiMC-like hash (more rounds = more constraints)
-// This creates ~3*HASH_ROUNDS constraints per hash, giving realistic proof times
-const HASH_ROUNDS: usize = 64;
+use rand_core::OsRng;
 
 // Initialize panic hook for better error messages
 #[wasm_bindgen(start)]
@@ -42,469 +45,152 @@ pub fn init() {
 // Data Structures
 // ============================================================================
 
-/// Shield request from JS
+/// Shield request from JS - matches real MASP Output circuit
 #[derive(Serialize, Deserialize)]
 pub struct ShieldRequest {
     pub token_address: String,
     pub amount: String,
-    pub recipient_pk: String,
-    pub randomness: String,
+    pub asset_type: String,
+    pub recipient_diversifier: String,
+    pub recipient_pk_d: String,
+    pub rcm: String,
+    pub esk: String,
+    pub rcv: String,
 }
 
-/// Unshield request from JS
+/// Unshield request from JS - matches real MASP Spend circuit
 #[derive(Serialize, Deserialize)]
 pub struct UnshieldRequest {
-    pub nullifier: String,
-    pub merkle_root: String,
-    pub merkle_path: Vec<String>,
-    pub note_commitment: String,
     pub amount: String,
-    pub recipient: String,
-    pub spend_key: String,
+    pub asset_type: String,
+    pub proof_generation_key_ak: String,
+    pub proof_generation_key_nsk: String,
+    pub diversifier: String,
+    pub rcm: String,
+    pub ar: String,
+    pub anchor: String,
+    pub merkle_path: Vec<MerkleNode>,
+    pub rcv: String,
 }
 
-/// Proof result returned to JS
 #[derive(Serialize, Deserialize)]
-pub struct ProofResult {
+pub struct MerkleNode {
+    pub hash: String,
+    pub is_right: bool,
+}
+
+/// Output proof result with specific public inputs
+#[derive(Serialize, Deserialize)]
+pub struct OutputProofResult {
     pub proof: String,
-    pub public_inputs: Vec<String>,
+    pub cv_u: String,
+    pub cv_v: String,
+    pub epk_u: String,
+    pub epk_v: String,
+    pub cm: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Spend proof result with specific public inputs
+#[derive(Serialize, Deserialize)]
+pub struct SpendProofResult {
+    pub proof: String,
+    pub rk_u: String,
+    pub rk_v: String,
+    pub cv_u: String,
+    pub cv_v: String,
+    pub anchor: String,
+    pub nf_0: String,
+    pub nf_1: String,
     pub success: bool,
     pub error: Option<String>,
 }
 
 // ============================================================================
-// MiMC-like Hash Function (in-circuit)
-// Based on the MiMC-p/p permutation structure used in ZK circuits
+// Parameter Storage
 // ============================================================================
 
-/// Round constants for MiMC-like hash
-fn get_round_constants() -> Vec<Scalar> {
-    let mut constants = Vec::with_capacity(HASH_ROUNDS);
-    let mut current = Scalar::from(42u64);
-    for _ in 0..HASH_ROUNDS {
-        current = current * current + Scalar::from(7u64);
-        constants.push(current);
-    }
-    constants
+struct MaspParams {
+    output_params: Parameters<Bls12>,
+    output_vk: PreparedVerifyingKey<Bls12>,
+    spend_params: Parameters<Bls12>,
+    spend_vk: PreparedVerifyingKey<Bls12>,
 }
 
-/// MiMC-like hash gadget - creates ~3*HASH_ROUNDS constraints
-/// This is similar to the Pedersen hash used in Sapling/MASP but optimized for
-/// algebraic circuits with fewer constraints per operation.
-fn mimc_hash<CS: ConstraintSystem<Scalar>>(
-    cs: &mut CS,
-    prefix: &str,
-    left: Variable,
-    right: Variable,
-    left_val: Option<Scalar>,
-    right_val: Option<Scalar>,
-) -> Result<(Variable, Option<Scalar>), SynthesisError> {
-    let round_constants = get_round_constants();
+static MASP_PARAMS: Mutex<Option<MaspParams>> = Mutex::new(None);
 
-    let mut xl = left;
-    let mut xr = right;
-    let mut xl_val = left_val;
-    let mut xr_val = right_val;
+// ============================================================================
+// EIP-2537 Point Encoding
+// Using bytes representation compatible with masp_proofs types
+// ============================================================================
 
-    for i in 0..HASH_ROUNDS {
-        // t = xl + c_i
-        let t_val = xl_val.map(|x| x + round_constants[i]);
+/// Convert G1 affine point to EIP-2537 format (128 bytes)
+fn g1_affine_to_eip2537(point: &masp_proofs::bls12_381::G1Affine) -> Vec<u8> {
+    // EIP-2537 expects: 16 zero bytes + 48 byte x + 16 zero bytes + 48 byte y
+    let uncompressed = point.to_uncompressed();
+    let x = &uncompressed.as_ref()[0..48];
+    let y = &uncompressed.as_ref()[48..96];
 
-        // t2 = t * t
-        let t2 = cs.alloc(
-            || format!("{}_round_{}_t2", prefix, i),
-            || t_val.map(|t| t * t).ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        // Constraint: t2 = (xl + c_i)^2
-        cs.enforce(
-            || format!("{}_round_{}_t2_constraint", prefix, i),
-            |lc| lc + xl + (round_constants[i], CS::one()),
-            |lc| lc + xl + (round_constants[i], CS::one()),
-            |lc| lc + t2,
-        );
-
-        // t4 = t2 * t2
-        let t4_val = t_val.map(|t| {
-            let t2 = t * t;
-            t2 * t2
-        });
-        let t4 = cs.alloc(
-            || format!("{}_round_{}_t4", prefix, i),
-            || t4_val.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        cs.enforce(
-            || format!("{}_round_{}_t4_constraint", prefix, i),
-            |lc| lc + t2,
-            |lc| lc + t2,
-            |lc| lc + t4,
-        );
-
-        // t5 = t4 * t (= t^5)
-        let t5_val = t_val.map(|t| {
-            let t2 = t * t;
-            let t4 = t2 * t2;
-            t4 * t
-        });
-        let t5 = cs.alloc(
-            || format!("{}_round_{}_t5", prefix, i),
-            || t5_val.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        cs.enforce(
-            || format!("{}_round_{}_t5_constraint", prefix, i),
-            |lc| lc + t4,
-            |lc| lc + xl + (round_constants[i], CS::one()),
-            |lc| lc + t5,
-        );
-
-        // new_xl = t5 + xr
-        let new_xl_val = match (t5_val, xr_val) {
-            (Some(t5), Some(xr)) => Some(t5 + xr),
-            _ => None,
-        };
-
-        if i < HASH_ROUNDS - 1 {
-            let new_xl = cs.alloc(
-                || format!("{}_round_{}_new_xl", prefix, i),
-                || new_xl_val.ok_or(SynthesisError::AssignmentMissing),
-            )?;
-
-            cs.enforce(
-                || format!("{}_round_{}_feistel", prefix, i),
-                |lc| lc + t5 + xr,
-                |lc| lc + CS::one(),
-                |lc| lc + new_xl,
-            );
-
-            xr = xl;
-            xr_val = xl_val;
-            xl = new_xl;
-            xl_val = new_xl_val;
-        } else {
-            // Final round - output is t5 + xr + xl
-            let output_val = match (t5_val, xr_val, xl_val) {
-                (Some(t5), Some(xr), Some(xl)) => Some(t5 + xr + xl),
-                _ => None,
-            };
-            let output = cs.alloc(
-                || format!("{}_output", prefix),
-                || output_val.ok_or(SynthesisError::AssignmentMissing),
-            )?;
-
-            cs.enforce(
-                || format!("{}_output_constraint", prefix),
-                |lc| lc + t5 + xr + xl,
-                |lc| lc + CS::one(),
-                |lc| lc + output,
-            );
-
-            return Ok((output, output_val));
-        }
-    }
-
-    unreachable!()
+    let mut result = Vec::with_capacity(128);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y);
+    result
 }
 
-/// Compute MiMC hash outside of circuit for witness generation
-fn mimc_hash_scalar(left: Scalar, right: Scalar) -> Scalar {
-    let round_constants = get_round_constants();
-    let mut xl = left;
-    let mut xr = right;
+/// Convert G2 affine point to EIP-2537 format (256 bytes)
+fn g2_affine_to_eip2537(point: &masp_proofs::bls12_381::G2Affine) -> Vec<u8> {
+    let uncompressed = point.to_uncompressed();
+    let bytes = uncompressed.as_ref();
 
-    for i in 0..HASH_ROUNDS {
-        let t = xl + round_constants[i];
-        let t2 = t * t;
-        let t4 = t2 * t2;
-        let t5 = t4 * t;
+    // Format: x.c1 (48) || x.c0 (48) || y.c1 (48) || y.c0 (48)
+    let x_c1 = &bytes[0..48];
+    let x_c0 = &bytes[48..96];
+    let y_c1 = &bytes[96..144];
+    let y_c0 = &bytes[144..192];
 
-        if i < HASH_ROUNDS - 1 {
-            let new_xl = t5 + xr;
-            xr = xl;
-            xl = new_xl;
-        } else {
-            return t5 + xr + xl;
-        }
-    }
+    let mut result = Vec::with_capacity(256);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x_c1);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(x_c0);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y_c1);
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y_c0);
+    result
+}
 
-    unreachable!()
+/// Encode proof to EIP-2537 format (512 bytes)
+fn proof_to_eip2537(proof: &Proof<Bls12>) -> Vec<u8> {
+    let mut result = Vec::with_capacity(512);
+    result.extend_from_slice(&g1_affine_to_eip2537(&proof.a));
+    result.extend_from_slice(&g2_affine_to_eip2537(&proof.b));
+    result.extend_from_slice(&g1_affine_to_eip2537(&proof.c));
+    result
+}
+
+fn proof_to_hex(proof: &Proof<Bls12>) -> String {
+    format!("0x{}", hex::encode(proof_to_eip2537(proof)))
+}
+
+fn g1_to_eip2537_hex(point: &masp_proofs::bls12_381::G1Affine) -> String {
+    hex::encode(g1_affine_to_eip2537(point))
+}
+
+fn g2_to_eip2537_hex(point: &masp_proofs::bls12_381::G2Affine) -> String {
+    hex::encode(g2_affine_to_eip2537(point))
 }
 
 // ============================================================================
-// MASP Circuits
-// These circuits implement MASP semantics using bellman for browser compatibility.
-// The structure follows Namada's MASP:
-// - Output circuit: creates new shielded notes
-// - Spend circuit: consumes existing notes with nullifier revelation
+// Scalar Conversion Helpers
 // ============================================================================
 
-/// Output circuit for shielding tokens (creating new notes)
-///
-/// This circuit proves knowledge of (value, randomness, recipient_pk) such that:
-/// - value_commitment = Hash(value, randomness)
-/// - note_commitment = Hash(value_commitment, Hash(recipient_pk, randomness))
-///
-/// Public inputs: [value_commitment, note_commitment]
-///
-/// Note: In production MASP (Namada), Pedersen commitments on the JubjJub curve
-/// are used. This implementation uses MiMC hash for browser efficiency.
-struct MASPOutputCircuit {
-    // Private inputs
-    value: Option<Scalar>,
-    randomness: Option<Scalar>,
-    recipient_pk: Option<Scalar>,
-    // Public inputs (computed)
-    value_commitment: Option<Scalar>,
-    note_commitment: Option<Scalar>,
-}
+fn hex_to_bls_scalar(hex: &str) -> Result<masp_proofs::bls12_381::Scalar, String> {
+    use masp_proofs::group::ff::PrimeField;
 
-impl Circuit<Scalar> for MASPOutputCircuit {
-    fn synthesize<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        // Allocate private inputs
-        let value = cs.alloc(
-            || "value",
-            || self.value.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let randomness = cs.alloc(
-            || "randomness",
-            || self.randomness.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let recipient_pk = cs.alloc(
-            || "recipient_pk",
-            || self.recipient_pk.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        // Allocate public inputs
-        let value_commitment_input = cs.alloc_input(
-            || "value_commitment",
-            || self.value_commitment.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let note_commitment_input = cs.alloc_input(
-            || "note_commitment",
-            || self.note_commitment.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        // Compute value_commitment = MiMC(value, randomness)
-        let (computed_vc, computed_vc_val) = mimc_hash(
-            cs,
-            "value_commitment",
-            value,
-            randomness,
-            self.value,
-            self.randomness,
-        )?;
-
-        // Constraint: computed value_commitment matches public input
-        cs.enforce(
-            || "value_commitment_matches",
-            |lc| lc + computed_vc,
-            |lc| lc + CS::one(),
-            |lc| lc + value_commitment_input,
-        );
-
-        // Compute pk_hash = MiMC(recipient_pk, randomness)
-        let (pk_hash, pk_hash_val) = mimc_hash(
-            cs,
-            "pk_hash",
-            recipient_pk,
-            randomness,
-            self.recipient_pk,
-            self.randomness,
-        )?;
-
-        // Compute note_commitment = MiMC(value_commitment, pk_hash)
-        let (computed_nc, _) = mimc_hash(
-            cs,
-            "note_commitment",
-            computed_vc,
-            pk_hash,
-            computed_vc_val,
-            pk_hash_val,
-        )?;
-
-        // Constraint: computed note_commitment matches public input
-        cs.enforce(
-            || "note_commitment_matches",
-            |lc| lc + computed_nc,
-            |lc| lc + CS::one(),
-            |lc| lc + note_commitment_input,
-        );
-
-        Ok(())
-    }
-}
-
-/// Spend circuit for unshielding tokens (consuming notes)
-///
-/// This circuit proves:
-/// - Knowledge of (value, spend_key, randomness) for a note
-/// - The note exists in the Merkle tree with given root
-/// - The nullifier is correctly computed to prevent double-spending
-///
-/// Public inputs: [merkle_root, nullifier, value_commitment]
-///
-/// Note: In production MASP, the Merkle tree uses Pedersen hashes and the
-/// nullifier derivation involves the nullifier deriving key (nk).
-struct MASPSpendCircuit {
-    // Private inputs
-    value: Option<Scalar>,
-    randomness: Option<Scalar>,
-    spend_key: Option<Scalar>,
-    merkle_path: Vec<(Option<Scalar>, Option<bool>)>, // (sibling, is_right)
-    // For note reconstruction
-    recipient_pk: Option<Scalar>,
-    // Public inputs
-    merkle_root: Option<Scalar>,
-    nullifier: Option<Scalar>,
-    value_commitment: Option<Scalar>,
-}
-
-impl Circuit<Scalar> for MASPSpendCircuit {
-    fn synthesize<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        // Allocate private inputs
-        let value = cs.alloc(
-            || "value",
-            || self.value.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let randomness = cs.alloc(
-            || "randomness",
-            || self.randomness.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let spend_key = cs.alloc(
-            || "spend_key",
-            || self.spend_key.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let recipient_pk = cs.alloc(
-            || "recipient_pk",
-            || self.recipient_pk.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        // Allocate public inputs
-        let merkle_root_input = cs.alloc_input(
-            || "merkle_root",
-            || self.merkle_root.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let nullifier_input = cs.alloc_input(
-            || "nullifier",
-            || self.nullifier.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        let value_commitment_input = cs.alloc_input(
-            || "value_commitment",
-            || self.value_commitment.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-
-        // Compute value_commitment = MiMC(value, randomness)
-        let (computed_vc, computed_vc_val) = mimc_hash(
-            cs,
-            "spend_value_commitment",
-            value,
-            randomness,
-            self.value,
-            self.randomness,
-        )?;
-
-        // Verify value_commitment matches
-        cs.enforce(
-            || "spend_value_commitment_matches",
-            |lc| lc + computed_vc,
-            |lc| lc + CS::one(),
-            |lc| lc + value_commitment_input,
-        );
-
-        // Compute pk_hash = MiMC(recipient_pk, randomness)
-        let (pk_hash, pk_hash_val) = mimc_hash(
-            cs,
-            "spend_pk_hash",
-            recipient_pk,
-            randomness,
-            self.recipient_pk,
-            self.randomness,
-        )?;
-
-        // Compute note_commitment = MiMC(value_commitment, pk_hash)
-        let (note_commitment, note_commitment_val) = mimc_hash(
-            cs,
-            "spend_note_commitment",
-            computed_vc,
-            pk_hash,
-            computed_vc_val,
-            pk_hash_val,
-        )?;
-
-        // Compute nullifier = MiMC(note_commitment, spend_key)
-        let (computed_nullifier, _) = mimc_hash(
-            cs,
-            "computed_nullifier",
-            note_commitment,
-            spend_key,
-            note_commitment_val,
-            self.spend_key,
-        )?;
-
-        // Verify nullifier matches
-        cs.enforce(
-            || "nullifier_matches",
-            |lc| lc + computed_nullifier,
-            |lc| lc + CS::one(),
-            |lc| lc + nullifier_input,
-        );
-
-        // Merkle tree verification (16 levels = 65536 leaves)
-        let mut current_hash = note_commitment;
-        let mut current_hash_val = note_commitment_val;
-
-        for (i, (sibling, is_right)) in self.merkle_path.iter().enumerate() {
-            let sibling_var = cs.alloc(
-                || format!("merkle_sibling_{}", i),
-                || sibling.ok_or(SynthesisError::AssignmentMissing),
-            )?;
-
-            // Determine order based on position
-            let (left, right, left_val, right_val) = if is_right.unwrap_or(false) {
-                (sibling_var, current_hash, *sibling, current_hash_val)
-            } else {
-                (current_hash, sibling_var, current_hash_val, *sibling)
-            };
-
-            let (new_hash, new_hash_val) = mimc_hash(
-                cs,
-                &format!("merkle_hash_{}", i),
-                left,
-                right,
-                left_val,
-                right_val,
-            )?;
-
-            current_hash = new_hash;
-            current_hash_val = new_hash_val;
-        }
-
-        // Verify computed root matches public input
-        cs.enforce(
-            || "merkle_root_matches",
-            |lc| lc + current_hash,
-            |lc| lc + CS::one(),
-            |lc| lc + merkle_root_input,
-        );
-
-        Ok(())
-    }
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-fn hex_to_scalar(hex: &str) -> Result<Scalar, String> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     let padded = format!("{:0>64}", hex);
     let bytes = hex::decode(&padded).map_err(|e| format!("Invalid hex: {}", e))?;
@@ -513,406 +199,643 @@ fn hex_to_scalar(hex: &str) -> Result<Scalar, String> {
     arr.copy_from_slice(&bytes[..32]);
     arr.reverse(); // Convert to little-endian
 
-    Option::from(Scalar::from_bytes(&arr)).ok_or_else(|| "Invalid scalar".to_string())
+    Option::from(masp_proofs::bls12_381::Scalar::from_repr(arr))
+        .ok_or_else(|| "Invalid BLS scalar".to_string())
 }
 
-fn scalar_to_hex(s: &Scalar) -> String {
-    let bytes = s.to_bytes();
+fn hex_to_jubjub_fr(hex: &str) -> Result<jubjub::Fr, String> {
+    use masp_proofs::group::ff::PrimeField;
+
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    let padded = format!("{:0>64}", hex);
+    let bytes = hex::decode(&padded).map_err(|e| format!("Invalid hex: {}", e))?;
+
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes[..32]);
+    arr.reverse();
+
+    Option::from(jubjub::Fr::from_repr(arr))
+        .ok_or_else(|| "Invalid jubjub::Fr".to_string())
+}
+
+fn bls_scalar_to_hex(s: &masp_proofs::bls12_381::Scalar) -> String {
+    use masp_proofs::group::ff::PrimeField;
+    let bytes = s.to_repr();
     let mut be_bytes = bytes;
     be_bytes.reverse();
-    hex::encode(be_bytes)
+    format!("0x{}", hex::encode(be_bytes))
 }
 
 // ============================================================================
-// EIP-2537 Point Encoding
-// EIP-2537 expects points in uncompressed format with specific padding:
-// - G1: 128 bytes (x: 64 bytes, y: 64 bytes) - 16 zero bytes + 48 byte coordinate
-// - G2: 256 bytes (x: 128 bytes, y: 128 bytes) - x and y are Fp2 = (c0, c1)
+// WASM Exports - Parameter Loading
 // ============================================================================
 
-/// Encode G1 point to EIP-2537 format (128 bytes)
-fn g1_to_eip2537(point: &bls12_381::G1Affine) -> Vec<u8> {
-    let uncompressed = point.to_uncompressed();
-    // bls12_381 to_uncompressed: 96 bytes = x (48 bytes) || y (48 bytes), big-endian
-    let x = &uncompressed[0..48];
-    let y = &uncompressed[48..96];
-
-    let mut result = Vec::with_capacity(128);
-    // Pad x to 64 bytes (16 zeros + 48 byte coordinate)
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(x);
-    // Pad y to 64 bytes (16 zeros + 48 byte coordinate)
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(y);
-
-    result
-}
-
-/// Encode G2 point to EIP-2537 format (256 bytes)
-fn g2_to_eip2537(point: &bls12_381::G2Affine) -> Vec<u8> {
-    let uncompressed = point.to_uncompressed();
-    // bls12_381 to_uncompressed: 192 bytes
-    // Format: x.c1 (48) || x.c0 (48) || y.c1 (48) || y.c0 (48)
-    // EIP-2537 uses same Zcash format: c1 (imaginary) || c0 (real) for each Fp2
-    // We just need to add 16-byte zero padding to each 48-byte component
-    let x_c1 = &uncompressed[0..48];
-    let x_c0 = &uncompressed[48..96];
-    let y_c1 = &uncompressed[96..144];
-    let y_c0 = &uncompressed[144..192];
-
-    let mut result = Vec::with_capacity(256);
-    // x.c1 (imaginary) padded to 64 bytes
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(x_c1);
-    // x.c0 (real) padded to 64 bytes
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(x_c0);
-    // y.c1 (imaginary) padded to 64 bytes
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(y_c1);
-    // y.c0 (real) padded to 64 bytes
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(y_c0);
-
-    result
-}
-
-/// Encode proof to EIP-2537 format (512 bytes: A || B || C)
-fn proof_to_eip2537(proof: &Proof<Bls12>) -> Vec<u8> {
-    let mut result = Vec::with_capacity(512);
-    result.extend_from_slice(&g1_to_eip2537(&proof.a));
-    result.extend_from_slice(&g2_to_eip2537(&proof.b));
-    result.extend_from_slice(&g1_to_eip2537(&proof.c));
-    result
-}
-
-fn proof_to_hex(proof: &Proof<Bls12>) -> String {
-    hex::encode(proof_to_eip2537(proof))
-}
-
-// ============================================================================
-// Cached Parameters
-// Parameters are generated once and cached for the session.
-// In production, these would come from a trusted setup ceremony.
-// ============================================================================
-
-use std::sync::OnceLock;
-
-static OUTPUT_PARAMS: OnceLock<Parameters<Bls12>> = OnceLock::new();
-static SPEND_PARAMS: OnceLock<Parameters<Bls12>> = OnceLock::new();
-
-fn get_output_params() -> &'static Parameters<Bls12> {
-    OUTPUT_PARAMS.get_or_init(|| {
-        web_sys::console::log_1(&"[MASP] Generating output circuit parameters...".into());
-        let circuit = MASPOutputCircuit {
-            value: None,
-            randomness: None,
-            recipient_pk: None,
-            value_commitment: None,
-            note_commitment: None,
-        };
-        let params = generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng)
-            .expect("Failed to generate output circuit parameters");
-        web_sys::console::log_1(&"[MASP] Output circuit parameters generated".into());
-        params
-    })
-}
-
-fn get_spend_params() -> &'static Parameters<Bls12> {
-    SPEND_PARAMS.get_or_init(|| {
-        web_sys::console::log_1(&"[MASP] Generating spend circuit parameters...".into());
-        let circuit = MASPSpendCircuit {
-            value: None,
-            randomness: None,
-            spend_key: None,
-            merkle_path: vec![(None, None); MERKLE_DEPTH],
-            recipient_pk: None,
-            merkle_root: None,
-            nullifier: None,
-            value_commitment: None,
-        };
-        let params = generate_random_parameters::<Bls12, _, _>(circuit, &mut OsRng)
-            .expect("Failed to generate spend circuit parameters");
-        web_sys::console::log_1(&"[MASP] Spend circuit parameters generated".into());
-        params
-    })
-}
-
-// ============================================================================
-// WASM Exports
-// ============================================================================
-
+/// Load MASP parameters from bytes (downloaded by webapp)
 #[wasm_bindgen]
-pub fn init_prover() -> Result<JsValue, JsValue> {
+pub fn load_masp_parameters(
+    spend_params_bytes: &[u8],
+    output_params_bytes: &[u8],
+) -> Result<JsValue, JsValue> {
+    web_sys::console::log_1(&format!(
+        "[MASP] Loading parameters: spend={} bytes, output={} bytes",
+        spend_params_bytes.len(),
+        output_params_bytes.len()
+    ).into());
+
     let start = js_sys::Date::now();
 
-    web_sys::console::log_1(&"[MASP] Initializing prover...".into());
+    // Parse spend parameters
+    web_sys::console::log_1(&"[MASP] Parsing spend parameters...".into());
+    let spend_params = Parameters::<Bls12>::read(
+        &mut Cursor::new(spend_params_bytes),
+        false,
+    ).map_err(|e| JsValue::from_str(&format!("Failed to parse spend params: {:?}", e)))?;
 
-    let _ = get_output_params();
-    let _ = get_spend_params();
+    let spend_vk = prepare_verifying_key(&spend_params.vk);
+    web_sys::console::log_1(&format!(
+        "[MASP] Spend VK: {} IC points",
+        spend_params.vk.ic.len()
+    ).into());
+
+    // Parse output parameters
+    web_sys::console::log_1(&"[MASP] Parsing output parameters...".into());
+    let output_params = Parameters::<Bls12>::read(
+        &mut Cursor::new(output_params_bytes),
+        false,
+    ).map_err(|e| JsValue::from_str(&format!("Failed to parse output params: {:?}", e)))?;
+
+    let output_vk = prepare_verifying_key(&output_params.vk);
+    web_sys::console::log_1(&format!(
+        "[MASP] Output VK: {} IC points",
+        output_params.vk.ic.len()
+    ).into());
+
+    // Store parameters
+    let mut params = MASP_PARAMS.lock().map_err(|e| JsValue::from_str(&format!("Lock error: {}", e)))?;
+    *params = Some(MaspParams {
+        output_params,
+        output_vk,
+        spend_params,
+        spend_vk,
+    });
 
     let elapsed = js_sys::Date::now() - start;
-    web_sys::console::log_1(&format!("[MASP] Prover initialized in {:.2}ms", elapsed).into());
+    web_sys::console::log_1(&format!("[MASP] Parameters loaded in {:.2}ms", elapsed).into());
 
     Ok(serde_wasm_bindgen::to_value(&serde_json::json!({
         "success": true,
-        "message": "Prover initialized successfully"
+        "message": "MASP parameters loaded successfully",
+        "elapsed_ms": elapsed
     }))?)
 }
 
+/// Check if MASP parameters are loaded
 #[wasm_bindgen]
-pub fn generate_shield_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
-    let start_time = js_sys::Date::now();
-    web_sys::console::log_1(&"[MASP] Starting shield proof generation...".into());
+pub fn is_initialized() -> bool {
+    MASP_PARAMS.lock().map(|p| p.is_some()).unwrap_or(false)
+}
 
+/// Initialize prover (for backwards compatibility)
+#[wasm_bindgen]
+pub fn init_prover() -> Result<JsValue, JsValue> {
+    let is_init = is_initialized();
+
+    Ok(serde_wasm_bindgen::to_value(&serde_json::json!({
+        "success": is_init,
+        "message": if is_init {
+            "Prover ready with loaded parameters"
+        } else {
+            "Parameters not loaded - call load_masp_parameters first"
+        },
+        "requires_params": !is_init
+    }))?)
+}
+
+// ============================================================================
+// WASM Exports - Proof Generation (Real MASP)
+// ============================================================================
+
+/// Generate an Output proof for shielding tokens
+#[wasm_bindgen]
+pub fn generate_output_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
+    let start_time = js_sys::Date::now();
+    web_sys::console::log_1(&"[MASP] Starting output proof generation...".into());
+
+    // Get parameters
+    let params_guard = MASP_PARAMS.lock()
+        .map_err(|e| JsValue::from_str(&format!("Lock error: {}", e)))?;
+    let params = params_guard.as_ref()
+        .ok_or_else(|| JsValue::from_str("MASP parameters not loaded"))?;
+
+    // Parse request
     let request: ShieldRequest = serde_wasm_bindgen::from_value(request_js)
         .map_err(|e| JsValue::from_str(&format!("Invalid request: {}", e)))?;
 
-    let amount = hex_to_scalar(&request.amount)
-        .map_err(|e| JsValue::from_str(&format!("Invalid amount: {}", e)))?;
-    let recipient_pk = hex_to_scalar(&request.recipient_pk)
-        .map_err(|e| JsValue::from_str(&format!("Invalid recipient_pk: {}", e)))?;
-    let randomness = hex_to_scalar(&request.randomness)
-        .map_err(|e| JsValue::from_str(&format!("Invalid randomness: {}", e)))?;
+    // Parse inputs
+    let value: u64 = u64::from_str_radix(
+        request.amount.strip_prefix("0x").unwrap_or(&request.amount),
+        16
+    ).map_err(|e| JsValue::from_str(&format!("Invalid amount: {}", e)))?;
 
-    web_sys::console::log_1(&"[MASP] Computing commitments...".into());
+    let asset_type = parse_asset_type(&request.asset_type)?;
+    let rcm = hex_to_jubjub_fr(&request.rcm)?;
+    let esk = hex_to_jubjub_fr(&request.esk)?;
+    let rcv = hex_to_jubjub_fr(&request.rcv)?;
+    let payment_address = parse_payment_address(&request.recipient_diversifier, &request.recipient_pk_d)?;
 
-    // Compute public inputs using MiMC hash
-    let value_commitment = mimc_hash_scalar(amount, randomness);
-    let pk_hash = mimc_hash_scalar(recipient_pk, randomness);
-    let note_commitment = mimc_hash_scalar(value_commitment, pk_hash);
+    web_sys::console::log_1(&format!(
+        "[MASP] Output: value={}, asset_type={:?}",
+        value,
+        hex::encode(&asset_type.get_identifier())
+    ).into());
 
-    let circuit = MASPOutputCircuit {
-        value: Some(amount),
-        randomness: Some(randomness),
-        recipient_pk: Some(recipient_pk),
+    // Create value commitment
+    let value_commitment = asset_type.value_commitment(value, rcv);
+    let cv: jubjub::ExtendedPoint = value_commitment.commitment().into();
+
+    // Compute note commitment
+    let note = payment_address
+        .create_note(asset_type, value, Rseed::BeforeZip212(rcm))
+        .ok_or_else(|| JsValue::from_str("Failed to create note"))?;
+    let cm = note.cmu();
+
+    // Compute ephemeral public key
+    let g_d = payment_address.g_d()
+        .ok_or_else(|| JsValue::from_str("Invalid diversifier"))?;
+    let epk: jubjub::ExtendedPoint = (g_d * esk).into();
+
+    web_sys::console::log_1(&"[MASP] Creating Output circuit...".into());
+
+    // Create the circuit
+    let circuit = OutputCircuit {
         value_commitment: Some(value_commitment),
-        note_commitment: Some(note_commitment),
+        payment_address: Some(payment_address),
+        commitment_randomness: Some(rcm),
+        esk: Some(esk),
+        asset_identifier: asset_type.identifier_bits(),
     };
 
-    web_sys::console::log_1(&"[MASP] Creating Groth16 proof...".into());
+    // Generate proof
+    web_sys::console::log_1(&"[MASP] Generating Groth16 proof...".into());
     let proof_start = js_sys::Date::now();
 
-    let params = get_output_params();
-    let proof = create_random_proof(circuit, params, &mut OsRng)
-        .map_err(|e| JsValue::from_str(&format!("Proof generation failed: {}", e)))?;
+    let proof = create_random_proof(circuit, &params.output_params, &mut OsRng)
+        .map_err(|e| JsValue::from_str(&format!("Proof generation failed: {:?}", e)))?;
 
     let proof_time = js_sys::Date::now() - proof_start;
-    web_sys::console::log_1(&format!("[MASP] Groth16 proof created in {:.2}ms", proof_time).into());
+    web_sys::console::log_1(&format!("[MASP] Proof created in {:.2}ms", proof_time).into());
 
+    // Verify proof locally
     web_sys::console::log_1(&"[MASP] Verifying proof locally...".into());
-    let pvk = prepare_verifying_key(&params.vk);
-    let public_inputs = vec![value_commitment, note_commitment];
+    let cv_affine = cv.to_affine();
+    let epk_affine = epk.to_affine();
 
-    verify_proof(&pvk, &proof, &public_inputs)
+    let public_inputs = vec![
+        cv_affine.get_u(),
+        cv_affine.get_v(),
+        epk_affine.get_u(),
+        epk_affine.get_v(),
+        cm,
+    ];
+
+    verify_proof(&params.output_vk, &proof, &public_inputs[..])
         .map_err(|e| JsValue::from_str(&format!("Proof verification failed: {:?}", e)))?;
 
     let total_time = js_sys::Date::now() - start_time;
-    web_sys::console::log_1(&format!("[MASP] Shield proof completed in {:.2}ms", total_time).into());
+    web_sys::console::log_1(&format!("[MASP] Output proof completed in {:.2}ms", total_time).into());
 
-    let result = ProofResult {
+    let result = OutputProofResult {
         proof: proof_to_hex(&proof),
-        public_inputs: vec![
-            format!("0x{}", scalar_to_hex(&value_commitment)),
-            format!("0x{}", scalar_to_hex(&note_commitment)),
-        ],
+        cv_u: bls_scalar_to_hex(&cv_affine.get_u()),
+        cv_v: bls_scalar_to_hex(&cv_affine.get_v()),
+        epk_u: bls_scalar_to_hex(&epk_affine.get_u()),
+        epk_v: bls_scalar_to_hex(&epk_affine.get_v()),
+        cm: bls_scalar_to_hex(&cm),
         success: true,
         error: None,
     };
 
     Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+/// Generate a Spend proof for unshielding tokens
+#[wasm_bindgen]
+pub fn generate_spend_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
+    let start_time = js_sys::Date::now();
+    web_sys::console::log_1(&"[MASP] Starting spend proof generation...".into());
+
+    // Get parameters
+    let params_guard = MASP_PARAMS.lock()
+        .map_err(|e| JsValue::from_str(&format!("Lock error: {}", e)))?;
+    let params = params_guard.as_ref()
+        .ok_or_else(|| JsValue::from_str("MASP parameters not loaded"))?;
+
+    // Parse request
+    let request: UnshieldRequest = serde_wasm_bindgen::from_value(request_js)
+        .map_err(|e| JsValue::from_str(&format!("Invalid request: {}", e)))?;
+
+    // Parse inputs
+    let value: u64 = u64::from_str_radix(
+        request.amount.strip_prefix("0x").unwrap_or(&request.amount),
+        16
+    ).map_err(|e| JsValue::from_str(&format!("Invalid amount: {}", e)))?;
+
+    let asset_type = parse_asset_type(&request.asset_type)?;
+    let rcm = hex_to_jubjub_fr(&request.rcm)?;
+    let ar = hex_to_jubjub_fr(&request.ar)?;
+    let rcv = hex_to_jubjub_fr(&request.rcv)?;
+    let anchor = hex_to_bls_scalar(&request.anchor)?;
+    let proof_generation_key = parse_proof_generation_key(
+        &request.proof_generation_key_ak,
+        &request.proof_generation_key_nsk,
+    )?;
+
+    let diversifier = parse_diversifier(&request.diversifier)?;
+    let merkle_path = parse_merkle_path(&request.merkle_path)?;
+
+    web_sys::console::log_1(&format!(
+        "[MASP] Spend: value={}, merkle_depth={}",
+        value, merkle_path.auth_path.len()
+    ).into());
+
+    // Create value commitment
+    let value_commitment = asset_type.value_commitment(value, rcv);
+    let cv: jubjub::ExtendedPoint = value_commitment.commitment().into();
+
+    // Compute viewing key and payment address
+    let viewing_key = proof_generation_key.to_viewing_key();
+    let payment_address = viewing_key.to_payment_address(diversifier)
+        .ok_or_else(|| JsValue::from_str("Invalid diversifier for viewing key"))?;
+
+    // Compute rk (re-randomized key)
+    let spending_key_generator = masp_primitives::constants::spending_key_generator();
+    let rk = masp_primitives::sapling::redjubjub::PublicKey(proof_generation_key.ak.into())
+        .randomize(ar, spending_key_generator);
+
+    // Create note and compute nullifier
+    let g_d = diversifier.g_d()
+        .ok_or_else(|| JsValue::from_str("Invalid diversifier"))?;
+    let note = Note {
+        asset_type,
+        value,
+        g_d,
+        pk_d: *payment_address.pk_d(),
+        rseed: Rseed::BeforeZip212(rcm),
+    };
+    let nullifier = note.nf(&viewing_key.nk, merkle_path.position);
+
+    web_sys::console::log_1(&"[MASP] Creating Spend circuit...".into());
+
+    // Create the circuit
+    let circuit = SpendCircuit {
+        value_commitment: Some(value_commitment),
+        proof_generation_key: Some(proof_generation_key),
+        payment_address: Some(payment_address),
+        commitment_randomness: Some(rcm),
+        ar: Some(ar),
+        auth_path: merkle_path.auth_path.iter()
+            .map(|(node, b)| Some(((*node).into(), *b)))
+            .collect(),
+        anchor: Some(anchor),
+    };
+
+    // Generate proof
+    web_sys::console::log_1(&"[MASP] Generating Groth16 proof...".into());
+    let proof_start = js_sys::Date::now();
+
+    let proof = create_random_proof(circuit, &params.spend_params, &mut OsRng)
+        .map_err(|e| JsValue::from_str(&format!("Proof generation failed: {:?}", e)))?;
+
+    let proof_time = js_sys::Date::now() - proof_start;
+    web_sys::console::log_1(&format!("[MASP] Proof created in {:.2}ms", proof_time).into());
+
+    // Verify proof locally
+    web_sys::console::log_1(&"[MASP] Verifying proof locally...".into());
+    let rk_affine = rk.0.to_affine();
+    let cv_affine = cv.to_affine();
+
+    // Pack nullifier into two field elements
+    let nf_bits = masp_proofs::bellman::gadgets::multipack::bytes_to_bits_le(&nullifier.0);
+    let nf_packed = masp_proofs::bellman::gadgets::multipack::compute_multipacking(&nf_bits);
+
+    let public_inputs = vec![
+        rk_affine.get_u(),
+        rk_affine.get_v(),
+        cv_affine.get_u(),
+        cv_affine.get_v(),
+        anchor,
+        nf_packed[0],
+        nf_packed[1],
+    ];
+
+    verify_proof(&params.spend_vk, &proof, &public_inputs[..])
+        .map_err(|e| JsValue::from_str(&format!("Proof verification failed: {:?}", e)))?;
+
+    let total_time = js_sys::Date::now() - start_time;
+    web_sys::console::log_1(&format!("[MASP] Spend proof completed in {:.2}ms", total_time).into());
+
+    let result = SpendProofResult {
+        proof: proof_to_hex(&proof),
+        rk_u: bls_scalar_to_hex(&rk_affine.get_u()),
+        rk_v: bls_scalar_to_hex(&rk_affine.get_v()),
+        cv_u: bls_scalar_to_hex(&cv_affine.get_u()),
+        cv_v: bls_scalar_to_hex(&cv_affine.get_v()),
+        anchor: bls_scalar_to_hex(&anchor),
+        nf_0: bls_scalar_to_hex(&nf_packed[0]),
+        nf_1: bls_scalar_to_hex(&nf_packed[1]),
+        success: true,
+        error: None,
+    };
+
+    Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+// ============================================================================
+// Parsing Helpers
+// ============================================================================
+
+fn parse_asset_type(hex: &str) -> Result<AssetType, JsValue> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    let bytes = hex::decode(hex)
+        .map_err(|e| JsValue::from_str(&format!("Invalid asset_type hex: {}", e)))?;
+
+    if bytes.len() != 32 {
+        return Err(JsValue::from_str(&format!(
+            "asset_type must be 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+
+    AssetType::from_identifier(&arr)
+        .ok_or_else(|| JsValue::from_str("Invalid asset type identifier"))
+}
+
+fn parse_diversifier(hex: &str) -> Result<Diversifier, JsValue> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    let bytes = hex::decode(hex)
+        .map_err(|e| JsValue::from_str(&format!("Invalid diversifier hex: {}", e)))?;
+
+    if bytes.len() != 11 {
+        return Err(JsValue::from_str(&format!(
+            "diversifier must be 11 bytes, got {}",
+            bytes.len()
+        )));
+    }
+
+    let mut arr = [0u8; 11];
+    arr.copy_from_slice(&bytes);
+
+    Ok(Diversifier(arr))
+}
+
+fn parse_payment_address(diversifier_hex: &str, pk_d_hex: &str) -> Result<PaymentAddress, JsValue> {
+    use masp_proofs::group::GroupEncoding;
+
+    let diversifier = parse_diversifier(diversifier_hex)?;
+
+    let pk_d_hex = pk_d_hex.strip_prefix("0x").unwrap_or(pk_d_hex);
+    let pk_d_bytes = hex::decode(pk_d_hex)
+        .map_err(|e| JsValue::from_str(&format!("Invalid pk_d hex: {}", e)))?;
+
+    if pk_d_bytes.len() != 32 {
+        return Err(JsValue::from_str(&format!(
+            "pk_d must be 32 bytes, got {}",
+            pk_d_bytes.len()
+        )));
+    }
+
+    let mut pk_d_arr = [0u8; 32];
+    pk_d_arr.copy_from_slice(&pk_d_bytes);
+
+    let pk_d = jubjub::SubgroupPoint::from_bytes(&pk_d_arr);
+    if pk_d.is_none().into() {
+        return Err(JsValue::from_str("Invalid pk_d point"));
+    }
+
+    PaymentAddress::from_parts(diversifier, pk_d.unwrap())
+        .ok_or_else(|| JsValue::from_str("Invalid payment address"))
+}
+
+fn parse_proof_generation_key(ak_hex: &str, nsk_hex: &str) -> Result<ProofGenerationKey, JsValue> {
+    use masp_proofs::group::GroupEncoding;
+
+    let ak_hex = ak_hex.strip_prefix("0x").unwrap_or(ak_hex);
+    let ak_bytes = hex::decode(ak_hex)
+        .map_err(|e| JsValue::from_str(&format!("Invalid ak hex: {}", e)))?;
+
+    if ak_bytes.len() != 32 {
+        return Err(JsValue::from_str(&format!(
+            "ak must be 32 bytes, got {}",
+            ak_bytes.len()
+        )));
+    }
+
+    let mut ak_arr = [0u8; 32];
+    ak_arr.copy_from_slice(&ak_bytes);
+
+    let ak = jubjub::SubgroupPoint::from_bytes(&ak_arr);
+    if ak.is_none().into() {
+        return Err(JsValue::from_str("Invalid ak point"));
+    }
+
+    let nsk = hex_to_jubjub_fr(nsk_hex)?;
+
+    Ok(ProofGenerationKey {
+        ak: ak.unwrap(),
+        nsk,
+    })
+}
+
+fn parse_merkle_path(nodes: &[MerkleNode]) -> Result<MerklePath<masp_primitives::sapling::Node>, JsValue> {
+    use masp_primitives::sapling::Node;
+
+    let mut auth_path = Vec::with_capacity(nodes.len());
+    let mut position: u64 = 0;
+
+    for (i, node) in nodes.iter().enumerate() {
+        let hash = hex_to_bls_scalar(&node.hash)?;
+        let node_val = Node::from_scalar(hash);
+        auth_path.push((node_val, node.is_right));
+
+        if node.is_right {
+            position |= 1u64 << i;
+        }
+    }
+
+    Ok(MerklePath {
+        auth_path,
+        position,
+    })
+}
+
+// ============================================================================
+// Verification Key Export
+// ============================================================================
+
+#[derive(Serialize, Deserialize)]
+pub struct VerificationKeyData {
+    pub alpha: String,
+    pub beta: String,
+    pub gamma: String,
+    pub delta: String,
+    pub ic: Vec<String>,
+}
+
+/// Get the Output circuit verification key in EIP-2537 format
+#[wasm_bindgen]
+pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
+    let params_guard = MASP_PARAMS.lock()
+        .map_err(|e| JsValue::from_str(&format!("Lock error: {}", e)))?;
+    let params = params_guard.as_ref()
+        .ok_or_else(|| JsValue::from_str("MASP parameters not loaded"))?;
+
+    let vk = &params.output_params.vk;
+
+    let vk_data = VerificationKeyData {
+        alpha: format!("0x{}", g1_to_eip2537_hex(&vk.alpha_g1)),
+        beta: format!("0x{}", g2_to_eip2537_hex(&vk.beta_g2)),
+        gamma: format!("0x{}", g2_to_eip2537_hex(&vk.gamma_g2)),
+        delta: format!("0x{}", g2_to_eip2537_hex(&vk.delta_g2)),
+        ic: vk.ic.iter().map(|p| format!("0x{}", g1_to_eip2537_hex(p))).collect(),
+    };
+
+    web_sys::console::log_1(&format!(
+        "[MASP] Output VK: {} IC points (for {} public inputs)",
+        vk_data.ic.len(),
+        vk_data.ic.len() - 1
+    ).into());
+
+    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
+}
+
+/// Get the Spend circuit verification key in EIP-2537 format
+#[wasm_bindgen]
+pub fn get_spend_verification_key() -> Result<JsValue, JsValue> {
+    let params_guard = MASP_PARAMS.lock()
+        .map_err(|e| JsValue::from_str(&format!("Lock error: {}", e)))?;
+    let params = params_guard.as_ref()
+        .ok_or_else(|| JsValue::from_str("MASP parameters not loaded"))?;
+
+    let vk = &params.spend_params.vk;
+
+    let vk_data = VerificationKeyData {
+        alpha: format!("0x{}", g1_to_eip2537_hex(&vk.alpha_g1)),
+        beta: format!("0x{}", g2_to_eip2537_hex(&vk.beta_g2)),
+        gamma: format!("0x{}", g2_to_eip2537_hex(&vk.gamma_g2)),
+        delta: format!("0x{}", g2_to_eip2537_hex(&vk.delta_g2)),
+        ic: vk.ic.iter().map(|p| format!("0x{}", g1_to_eip2537_hex(p))).collect(),
+    };
+
+    web_sys::console::log_1(&format!(
+        "[MASP] Spend VK: {} IC points (for {} public inputs)",
+        vk_data.ic.len(),
+        vk_data.ic.len() - 1
+    ).into());
+
+    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/// Generate random scalars for use in proof generation
+#[wasm_bindgen]
+pub fn generate_randomness() -> String {
+    use masp_proofs::group::ff::PrimeField;
+    let r = jubjub::Fr::random(&mut OsRng);
+    let bytes = r.to_repr();
+    let mut be_bytes = bytes;
+    be_bytes.reverse();
+    format!("0x{}", hex::encode(be_bytes))
+}
+
+/// Generate a random diversifier
+#[wasm_bindgen]
+pub fn generate_diversifier() -> String {
+    let mut bytes = [0u8; 11];
+    getrandom::getrandom(&mut bytes).expect("getrandom failed");
+    format!("0x{}", hex::encode(bytes))
+}
+
+/// Get the default asset type identifier for the native token
+#[wasm_bindgen]
+pub fn get_native_asset_type() -> String {
+    let asset = AssetType::new(b"native").expect("native asset type");
+    format!("0x{}", hex::encode(asset.get_identifier()))
+}
+
+/// Derive asset type from token address
+#[wasm_bindgen]
+pub fn derive_asset_type(token_address: &str) -> Result<String, JsValue> {
+    let addr = token_address.strip_prefix("0x").unwrap_or(token_address);
+    let bytes = hex::decode(addr)
+        .map_err(|e| JsValue::from_str(&format!("Invalid address: {}", e)))?;
+
+    let asset = AssetType::new(&bytes)
+        .map_err(|e| JsValue::from_str(&format!("Failed to derive asset type: {:?}", e)))?;
+
+    Ok(format!("0x{}", hex::encode(asset.get_identifier())))
+}
+
+/// Get MASP implementation info
+#[wasm_bindgen]
+pub fn get_masp_info() -> Result<JsValue, JsValue> {
+    let is_init = is_initialized();
+
+    let params_info = if is_init {
+        let params_guard = MASP_PARAMS.lock().ok();
+        params_guard.as_ref().and_then(|p| p.as_ref()).map(|params| {
+            serde_json::json!({
+                "output_ic_count": params.output_params.vk.ic.len(),
+                "spend_ic_count": params.spend_params.vk.ic.len(),
+            })
+        })
+    } else {
+        None
+    };
+
+    Ok(serde_wasm_bindgen::to_value(&serde_json::json!({
+        "version": "1.0.0",
+        "implementation": "Namada MASP (masp_proofs)",
+        "curve": "BLS12-381",
+        "proving_system": "Groth16",
+        "circuits": {
+            "output": {
+                "public_inputs": 5,
+                "description": "cv.u, cv.v, epk.u, epk.v, cm"
+            },
+            "spend": {
+                "public_inputs": 7,
+                "description": "rk.u, rk.v, cv.u, cv.v, anchor, nf[0], nf[1]"
+            }
+        },
+        "initialized": is_init,
+        "params": params_info,
+        "parameter_urls": {
+            "spend": "https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params",
+            "output": "https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params"
+        },
+        "parameter_sizes": {
+            "spend": "49.8 MB",
+            "output": "16.4 MB"
+        }
+    }))?)
+}
+
+// ============================================================================
+// Backwards Compatibility
+// ============================================================================
+
+#[wasm_bindgen]
+pub fn generate_shield_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
+    generate_output_proof(request_js)
 }
 
 #[wasm_bindgen]
 pub fn generate_unshield_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
-    let start_time = js_sys::Date::now();
-    web_sys::console::log_1(&"[MASP] Starting unshield proof generation...".into());
-
-    let request: UnshieldRequest = serde_wasm_bindgen::from_value(request_js)
-        .map_err(|e| JsValue::from_str(&format!("Invalid request: {}", e)))?;
-
-    let amount = hex_to_scalar(&request.amount)
-        .map_err(|e| JsValue::from_str(&format!("Invalid amount: {}", e)))?;
-    let spend_key = hex_to_scalar(&request.spend_key)
-        .map_err(|e| JsValue::from_str(&format!("Invalid spend_key: {}", e)))?;
-
-    // For demo, derive recipient_pk from spend_key
-    let recipient_pk = spend_key * Scalar::from(7u64);
-    let randomness = Scalar::random(&mut OsRng);
-
-    web_sys::console::log_1(&"[MASP] Computing note and nullifier...".into());
-
-    // Compute values
-    let value_commitment = mimc_hash_scalar(amount, randomness);
-    let pk_hash = mimc_hash_scalar(recipient_pk, randomness);
-    let note_commitment = mimc_hash_scalar(value_commitment, pk_hash);
-    let nullifier = mimc_hash_scalar(note_commitment, spend_key);
-
-    // Build Merkle path (for demo, use random siblings)
-    let mut merkle_path = Vec::with_capacity(MERKLE_DEPTH);
-    let mut current = note_commitment;
-
-    for i in 0..MERKLE_DEPTH {
-        let sibling = Scalar::random(&mut OsRng);
-        let is_right = i % 2 == 0;
-        merkle_path.push((Some(sibling), Some(is_right)));
-
-        current = if is_right {
-            mimc_hash_scalar(sibling, current)
-        } else {
-            mimc_hash_scalar(current, sibling)
-        };
-    }
-    let merkle_root = current;
-
-    let circuit = MASPSpendCircuit {
-        value: Some(amount),
-        randomness: Some(randomness),
-        spend_key: Some(spend_key),
-        merkle_path: merkle_path.clone(),
-        recipient_pk: Some(recipient_pk),
-        merkle_root: Some(merkle_root),
-        nullifier: Some(nullifier),
-        value_commitment: Some(value_commitment),
-    };
-
-    web_sys::console::log_1(&"[MASP] Creating Groth16 proof...".into());
-    let proof_start = js_sys::Date::now();
-
-    let params = get_spend_params();
-    let proof = create_random_proof(circuit, params, &mut OsRng)
-        .map_err(|e| JsValue::from_str(&format!("Proof generation failed: {}", e)))?;
-
-    let proof_time = js_sys::Date::now() - proof_start;
-    web_sys::console::log_1(&format!("[MASP] Groth16 proof created in {:.2}ms", proof_time).into());
-
-    web_sys::console::log_1(&"[MASP] Verifying proof locally...".into());
-    let pvk = prepare_verifying_key(&params.vk);
-    let public_inputs = vec![merkle_root, nullifier, value_commitment];
-
-    verify_proof(&pvk, &proof, &public_inputs)
-        .map_err(|e| JsValue::from_str(&format!("Proof verification failed: {:?}", e)))?;
-
-    let total_time = js_sys::Date::now() - start_time;
-    web_sys::console::log_1(&format!("[MASP] Unshield proof completed in {:.2}ms", total_time).into());
-
-    let result = ProofResult {
-        proof: proof_to_hex(&proof),
-        public_inputs: vec![
-            format!("0x{}", scalar_to_hex(&merkle_root)),
-            format!("0x{}", scalar_to_hex(&nullifier)),
-            format!("0x{}", scalar_to_hex(&value_commitment)),
-        ],
-        success: true,
-        error: None,
-    };
-
-    Ok(serde_wasm_bindgen::to_value(&result)?)
-}
-
-#[wasm_bindgen]
-pub fn generate_randomness() -> String {
-    let r = Scalar::random(&mut OsRng);
-    format!("0x{}", scalar_to_hex(&r))
-}
-
-/// Get information about the MASP implementation
-#[wasm_bindgen]
-pub fn get_masp_info() -> Result<JsValue, JsValue> {
-    Ok(serde_wasm_bindgen::to_value(&serde_json::json!({
-        "version": "0.1.0",
-        "curve": "BLS12-381",
-        "proving_system": "Groth16",
-        "hash_function": "MiMC-like (64 rounds)",
-        "merkle_depth": MERKLE_DEPTH,
-        "constraints": {
-            "output_circuit": "~576 constraints (3 hashes)",
-            "spend_circuit": "~5000+ constraints (4 hashes + 16-level Merkle)"
-        },
-        "note": "This is a demo implementation using MiMC hash. Production MASP uses Pedersen commitments from Namada's trusted setup."
-    }))?)
-}
-
-/// Verification key data for contract
-#[derive(Serialize, Deserialize)]
-pub struct VerificationKeyData {
-    pub alpha: String,      // G1 point (128 bytes uncompressed, 48 compressed)
-    pub beta: String,       // G2 point (256 bytes uncompressed, 96 compressed)
-    pub gamma: String,      // G2 point
-    pub delta: String,      // G2 point
-    pub ic: Vec<String>,    // Array of G1 points
-}
-
-fn g1_to_eip2537_hex(point: &bls12_381::G1Affine) -> String {
-    hex::encode(g1_to_eip2537(point))
-}
-
-fn g2_to_eip2537_hex(point: &bls12_381::G2Affine) -> String {
-    hex::encode(g2_to_eip2537(point))
-}
-
-/// Get the verification key for the Output circuit (used for shielding)
-/// Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
-#[wasm_bindgen]
-pub fn get_output_verification_key() -> Result<JsValue, JsValue> {
-    web_sys::console::log_1(&"[MASP] Getting output circuit verification key...".into());
-
-    let params = get_output_params();
-    let vk = &params.vk;
-
-    // Convert VK components to EIP-2537 format hex strings
-    let alpha_hex = g1_to_eip2537_hex(&vk.alpha_g1);
-    let beta_hex = g2_to_eip2537_hex(&vk.beta_g2);
-    let gamma_hex = g2_to_eip2537_hex(&vk.gamma_g2);
-    let delta_hex = g2_to_eip2537_hex(&vk.delta_g2);
-
-    // Convert IC points to EIP-2537 format
-    let ic_hex: Vec<String> = vk.ic.iter()
-        .map(|point| g1_to_eip2537_hex(point))
-        .collect();
-
-    web_sys::console::log_1(&format!("[MASP] Output VK: {} IC points, alpha len: {}", ic_hex.len(), alpha_hex.len()).into());
-
-    let vk_data = VerificationKeyData {
-        alpha: format!("0x{}", alpha_hex),
-        beta: format!("0x{}", beta_hex),
-        gamma: format!("0x{}", gamma_hex),
-        delta: format!("0x{}", delta_hex),
-        ic: ic_hex.iter().map(|s| format!("0x{}", s)).collect(),
-    };
-
-    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
-}
-
-/// Get the verification key for the Spend circuit (used for unshielding)
-/// Returns the VK in EIP-2537 format suitable for the MASPVerifier contract
-#[wasm_bindgen]
-pub fn get_spend_verification_key() -> Result<JsValue, JsValue> {
-    web_sys::console::log_1(&"[MASP] Getting spend circuit verification key...".into());
-
-    let params = get_spend_params();
-    let vk = &params.vk;
-
-    // Convert VK components to EIP-2537 format hex strings
-    let alpha_hex = g1_to_eip2537_hex(&vk.alpha_g1);
-    let beta_hex = g2_to_eip2537_hex(&vk.beta_g2);
-    let gamma_hex = g2_to_eip2537_hex(&vk.gamma_g2);
-    let delta_hex = g2_to_eip2537_hex(&vk.delta_g2);
-
-    // Convert IC points to EIP-2537 format
-    let ic_hex: Vec<String> = vk.ic.iter()
-        .map(|point| g1_to_eip2537_hex(point))
-        .collect();
-
-    web_sys::console::log_1(&format!("[MASP] Spend VK: {} IC points, alpha len: {}", ic_hex.len(), alpha_hex.len()).into());
-
-    let vk_data = VerificationKeyData {
-        alpha: format!("0x{}", alpha_hex),
-        beta: format!("0x{}", beta_hex),
-        gamma: format!("0x{}", gamma_hex),
-        delta: format!("0x{}", delta_hex),
-        ic: ic_hex.iter().map(|s| format!("0x{}", s)).collect(),
-    };
-
-    Ok(serde_wasm_bindgen::to_value(&vk_data)?)
+    generate_spend_proof(request_js)
 }

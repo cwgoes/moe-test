@@ -102,16 +102,17 @@ contract MASPPool {
     /// @param token The ERC20 token address
     /// @param amount The amount to deposit
     /// @param proof The Groth16 proof for the Output circuit
-    /// @param publicInputs The public inputs [valueCommitment, noteCommitment]
+    /// @param publicInputs The public inputs [cv.u, cv.v, epk.u, epk.v, cm] (5 elements)
     function shield(
         address token,
         uint256 amount,
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external {
-        require(publicInputs.length == 2, "Invalid public inputs");
+        require(publicInputs.length == 5, "Invalid public inputs: need 5 for Output circuit");
 
-        bytes32 noteCommitment = publicInputs[1];
+        // cm is the 5th element (index 4)
+        bytes32 noteCommitment = publicInputs[4];
 
         // Verify the commitment hasn't been used
         if (commitments[noteCommitment]) revert InvalidCommitment();
@@ -142,15 +143,16 @@ contract MASPPool {
 
     /// @notice Shield ETH into the pool
     /// @param proof The Groth16 proof for the Output circuit
-    /// @param publicInputs The public inputs [valueCommitment, noteCommitment]
+    /// @param publicInputs The public inputs [cv.u, cv.v, epk.u, epk.v, cm] (5 elements)
     function shieldETH(
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external payable {
-        require(publicInputs.length == 2, "Invalid public inputs");
+        require(publicInputs.length == 5, "Invalid public inputs: need 5 for Output circuit");
         require(msg.value > 0, "Must send ETH");
 
-        bytes32 noteCommitment = publicInputs[1];
+        // cm is the 5th element (index 4)
+        bytes32 noteCommitment = publicInputs[4];
 
         // Verify the commitment hasn't been used
         if (commitments[noteCommitment]) revert InvalidCommitment();
@@ -184,7 +186,7 @@ contract MASPPool {
     /// @param amount The amount to withdraw
     /// @param recipient The recipient address
     /// @param proof The Groth16 proof for the Spend circuit
-    /// @param publicInputs The public inputs [anchor, valueCommitment, nullifier, rk]
+    /// @param publicInputs The public inputs [rk.u, rk.v, cv.u, cv.v, anchor, nf[0], nf[1]] (7 elements)
     function unshield(
         address token,
         uint256 amount,
@@ -192,10 +194,12 @@ contract MASPPool {
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external {
-        require(publicInputs.length == 4, "Invalid public inputs");
+        require(publicInputs.length == 7, "Invalid public inputs: need 7 for Spend circuit");
 
-        bytes32 anchor = publicInputs[0];
-        bytes32 nullifier = publicInputs[2];
+        // anchor is at index 4, nullifier components at indices 5 and 6
+        bytes32 anchor = publicInputs[4];
+        // Combine nf[0] and nf[1] to form the nullifier hash for tracking
+        bytes32 nullifier = keccak256(abi.encodePacked(publicInputs[5], publicInputs[6]));
 
         // Verify the anchor is valid (historical root)
         if (!validRoots[anchor]) revert InvalidMerkleRoot();
@@ -225,17 +229,19 @@ contract MASPPool {
     /// @param amount The amount to withdraw
     /// @param recipient The recipient address
     /// @param proof The Groth16 proof for the Spend circuit
-    /// @param publicInputs The public inputs [anchor, valueCommitment, nullifier, rk]
+    /// @param publicInputs The public inputs [rk.u, rk.v, cv.u, cv.v, anchor, nf[0], nf[1]] (7 elements)
     function unshieldETH(
         uint256 amount,
         address payable recipient,
         bytes calldata proof,
         bytes32[] calldata publicInputs
     ) external {
-        require(publicInputs.length == 4, "Invalid public inputs");
+        require(publicInputs.length == 7, "Invalid public inputs: need 7 for Spend circuit");
 
-        bytes32 anchor = publicInputs[0];
-        bytes32 nullifier = publicInputs[2];
+        // anchor is at index 4, nullifier components at indices 5 and 6
+        bytes32 anchor = publicInputs[4];
+        // Combine nf[0] and nf[1] to form the nullifier hash for tracking
+        bytes32 nullifier = keccak256(abi.encodePacked(publicInputs[5], publicInputs[6]));
 
         // Verify the anchor is valid (historical root)
         if (!validRoots[anchor]) revert InvalidMerkleRoot();
