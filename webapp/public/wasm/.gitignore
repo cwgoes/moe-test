@@ -1,0 +1,8 @@
+# Ignore wasm-pack generated files except what we need
+*
+!.gitignore
+!masp_wasm.js
+!masp_wasm.d.ts
+!masp_wasm_bg.wasm
+!masp_wasm_bg.wasm.d.ts
+!prover-worker.js

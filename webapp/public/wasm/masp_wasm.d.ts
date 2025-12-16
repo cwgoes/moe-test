@@ -88,10 +88,10 @@ export interface InitOutput {
   readonly get_native_asset_type: () => [number, number];
   readonly get_output_verification_key: () => [number, number, number];
   readonly get_spend_verification_key: () => [number, number, number];
-  readonly init: () => void;
   readonly init_prover: () => [number, number, number];
   readonly is_initialized: () => number;
   readonly load_masp_parameters: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly init: () => void;
   readonly generate_shield_proof: (a: any) => [number, number, number];
   readonly generate_unshield_proof: (a: any) => [number, number, number];
   readonly __wbindgen_malloc: (a: number, b: number) => number;

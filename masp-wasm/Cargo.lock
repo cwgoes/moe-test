@@ -879,6 +879,7 @@ name = "masp-wasm"
 version = "0.1.0"
 dependencies = [
  "bellman",
+ "blake2s_simd",
  "bls12_381",
  "console_error_panic_hook",
  "ff",
