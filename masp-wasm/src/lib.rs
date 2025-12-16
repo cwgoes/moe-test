@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 // Use types re-exported from masp_proofs to ensure compatibility
 use masp_proofs::bellman::groth16::{
-    prepare_verifying_key, verify_proof, Proof, Parameters, PreparedVerifyingKey,
+    prepare_verifying_key, Proof, Parameters, PreparedVerifyingKey,
     create_random_proof,
 };
 use masp_proofs::bls12_381::Bls12;
@@ -113,8 +113,10 @@ pub struct SpendProofResult {
 
 struct MaspParams {
     output_params: Parameters<Bls12>,
+    #[allow(dead_code)]
     output_vk: PreparedVerifyingKey<Bls12>,
     spend_params: Parameters<Bls12>,
+    #[allow(dead_code)]
     spend_vk: PreparedVerifyingKey<Bls12>,
 }
 
@@ -385,22 +387,11 @@ pub fn generate_output_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
     let proof_time = js_sys::Date::now() - proof_start;
     web_sys::console::log_1(&format!("[MASP] Proof created in {:.2}ms", proof_time).into());
 
-    // Verify proof locally
-    web_sys::console::log_1(&"[MASP] Verifying proof locally...".into());
+    // Get affine coordinates for public inputs
     let cv_affine = cv.to_affine();
     let epk_affine = epk.to_affine();
 
-    let public_inputs = vec![
-        cv_affine.get_u(),
-        cv_affine.get_v(),
-        epk_affine.get_u(),
-        epk_affine.get_v(),
-        cm,
-    ];
-
-    verify_proof(&params.output_vk, &proof, &public_inputs[..])
-        .map_err(|e| JsValue::from_str(&format!("Proof verification failed: {:?}", e)))?;
-
+    // Note: We skip local verification to save time - proof is verified on-chain
     let total_time = js_sys::Date::now() - start_time;
     web_sys::console::log_1(&format!("[MASP] Output proof completed in {:.2}ms", total_time).into());
 
@@ -509,8 +500,7 @@ pub fn generate_spend_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
     let proof_time = js_sys::Date::now() - proof_start;
     web_sys::console::log_1(&format!("[MASP] Proof created in {:.2}ms", proof_time).into());
 
-    // Verify proof locally
-    web_sys::console::log_1(&"[MASP] Verifying proof locally...".into());
+    // Get affine coordinates for public inputs
     let rk_affine = rk.0.to_affine();
     let cv_affine = cv.to_affine();
 
@@ -518,19 +508,7 @@ pub fn generate_spend_proof(request_js: JsValue) -> Result<JsValue, JsValue> {
     let nf_bits = masp_proofs::bellman::gadgets::multipack::bytes_to_bits_le(&nullifier.0);
     let nf_packed = masp_proofs::bellman::gadgets::multipack::compute_multipacking(&nf_bits);
 
-    let public_inputs = vec![
-        rk_affine.get_u(),
-        rk_affine.get_v(),
-        cv_affine.get_u(),
-        cv_affine.get_v(),
-        anchor,
-        nf_packed[0],
-        nf_packed[1],
-    ];
-
-    verify_proof(&params.spend_vk, &proof, &public_inputs[..])
-        .map_err(|e| JsValue::from_str(&format!("Proof verification failed: {:?}", e)))?;
-
+    // Note: We skip local verification to save time - proof is verified on-chain
     let total_time = js_sys::Date::now() - start_time;
     web_sys::console::log_1(&format!("[MASP] Spend proof completed in {:.2}ms", total_time).into());
 

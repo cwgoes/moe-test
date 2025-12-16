@@ -28,10 +28,9 @@ bls12_381 = "0.8"
 ff = "0.13"
 group = "0.13"
 rand_core = { version = "0.6", features = ["getrandom"] }
-# Disable multicore feature - rayon doesn't work in WASM without special setup
-bellman = { version = "0.14", default-features = false, features = ["groth16"] }
+# Note: masp_proofs uses nam-bellperson internally for proof generation
 
-# Namada MASP circuits
+# Namada MASP circuits - uses nam-bellperson internally for proof generation
 masp_proofs = { version = "3.0", default-features = false, features = ["js"] }
 masp_primitives = "3.0"
 
