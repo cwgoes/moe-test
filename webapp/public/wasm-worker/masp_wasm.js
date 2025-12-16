@@ -117,6 +117,13 @@ let wasm_bindgen;
         return x === undefined || x === null;
     }
 
+    function passArray8ToWasm0(arg, malloc) {
+        const ptr = malloc(arg.length * 1, 1) >>> 0;
+        getUint8ArrayMemory0().set(arg, ptr / 1);
+        WASM_VECTOR_LEN = arg.length;
+        return ptr;
+    }
+
     function passStringToWasm0(arg, malloc, realloc) {
         if (realloc === undefined) {
             const buf = cachedTextEncoder.encode(arg);
@@ -182,31 +189,98 @@ let wasm_bindgen;
     let WASM_VECTOR_LEN = 0;
 
     /**
-     * Generate random bytes for use as randomness
+     * Derive asset type from token address
+     * @param {string} token_address
+     * @returns {string}
+     */
+    function derive_asset_type(token_address) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(token_address, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.derive_asset_type(ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    __exports.derive_asset_type = derive_asset_type;
+
+    /**
+     * Generate a random valid diversifier
+     * This tries random diversifiers until finding one that maps to a valid curve point
+     * @returns {string}
+     */
+    function generate_diversifier() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.generate_diversifier();
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    __exports.generate_diversifier = generate_diversifier;
+
+    /**
+     * Generate an Output proof for shielding tokens
+     * @param {any} request_js
+     * @returns {any}
+     */
+    function generate_output_proof(request_js) {
+        const ret = wasm.generate_output_proof(request_js);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    __exports.generate_output_proof = generate_output_proof;
+
+    /**
+     * Generate a random valid payment address (for testing)
+     * Returns diversifier and pk_d that can be used together for shielding
+     * @returns {any}
+     */
+    function generate_random_payment_address() {
+        const ret = wasm.generate_random_payment_address();
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    __exports.generate_random_payment_address = generate_random_payment_address;
+
+    /**
+     * Generate random scalars for use in proof generation
      * @returns {string}
      */
     function generate_randomness() {
-        let deferred2_0;
-        let deferred2_1;
+        let deferred1_0;
+        let deferred1_1;
         try {
             const ret = wasm.generate_randomness();
-            var ptr1 = ret[0];
-            var len1 = ret[1];
-            if (ret[3]) {
-                ptr1 = 0; len1 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
         } finally {
-            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
     }
     __exports.generate_randomness = generate_randomness;
 
     /**
-     * Generate a shield proof (Output circuit)
      * @param {any} request_js
      * @returns {any}
      */
@@ -220,7 +294,20 @@ let wasm_bindgen;
     __exports.generate_shield_proof = generate_shield_proof;
 
     /**
-     * Generate an unshield proof (Spend circuit)
+     * Generate a Spend proof for unshielding tokens
+     * @param {any} request_js
+     * @returns {any}
+     */
+    function generate_spend_proof(request_js) {
+        const ret = wasm.generate_spend_proof(request_js);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    __exports.generate_spend_proof = generate_spend_proof;
+
+    /**
      * @param {any} request_js
      * @returns {any}
      */
@@ -234,30 +321,61 @@ let wasm_bindgen;
     __exports.generate_unshield_proof = generate_unshield_proof;
 
     /**
-     * Get the verification key for the Output circuit (for contract setup)
+     * Get MASP implementation info
      * @returns {any}
      */
-    function get_output_vk() {
-        const ret = wasm.get_output_vk();
+    function get_masp_info() {
+        const ret = wasm.get_masp_info();
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
     }
-    __exports.get_output_vk = get_output_vk;
+    __exports.get_masp_info = get_masp_info;
 
     /**
-     * Get the verification key for the Spend circuit (for contract setup)
+     * Get the default asset type identifier for the native token
+     * @returns {string}
+     */
+    function get_native_asset_type() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.get_native_asset_type();
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    __exports.get_native_asset_type = get_native_asset_type;
+
+    /**
+     * Get the Output circuit verification key in EIP-2537 format
      * @returns {any}
      */
-    function get_spend_vk() {
-        const ret = wasm.get_spend_vk();
+    function get_output_verification_key() {
+        const ret = wasm.get_output_verification_key();
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
     }
-    __exports.get_spend_vk = get_spend_vk;
+    __exports.get_output_verification_key = get_output_verification_key;
+
+    /**
+     * Get the Spend circuit verification key in EIP-2537 format
+     * @returns {any}
+     */
+    function get_spend_verification_key() {
+        const ret = wasm.get_spend_verification_key();
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    __exports.get_spend_verification_key = get_spend_verification_key;
 
     function init() {
         wasm.init();
@@ -265,7 +383,7 @@ let wasm_bindgen;
     __exports.init = init;
 
     /**
-     * Initialize the prover (generates parameters)
+     * Initialize prover (for backwards compatibility)
      * @returns {any}
      */
     function init_prover() {
@@ -276,6 +394,35 @@ let wasm_bindgen;
         return takeFromExternrefTable0(ret[0]);
     }
     __exports.init_prover = init_prover;
+
+    /**
+     * Check if MASP parameters are loaded
+     * @returns {boolean}
+     */
+    function is_initialized() {
+        const ret = wasm.is_initialized();
+        return ret !== 0;
+    }
+    __exports.is_initialized = is_initialized;
+
+    /**
+     * Load MASP parameters from bytes (downloaded by webapp)
+     * @param {Uint8Array} spend_params_bytes
+     * @param {Uint8Array} output_params_bytes
+     * @returns {any}
+     */
+    function load_masp_parameters(spend_params_bytes, output_params_bytes) {
+        const ptr0 = passArray8ToWasm0(spend_params_bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(output_params_bytes, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.load_masp_parameters(ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    __exports.load_masp_parameters = load_masp_parameters;
 
     const EXPECTED_RESPONSE_TYPES = new Set(['basic', 'cors', 'default']);
 
@@ -455,6 +602,9 @@ let wasm_bindgen;
             const ret = arg0.length;
             return ret;
         };
+        imports.wbg.__wbg_log_1d990106d99dacb7 = function(arg0) {
+            console.log(arg0);
+        };
         imports.wbg.__wbg_msCrypto_a61aeb35a24c1329 = function(arg0) {
             const ret = arg0.msCrypto;
             return ret;
@@ -497,6 +647,10 @@ let wasm_bindgen;
         }, arguments) };
         imports.wbg.__wbg_node_905d3e251edff8a2 = function(arg0) {
             const ret = arg0.node;
+            return ret;
+        };
+        imports.wbg.__wbg_now_69d776cd24f5215b = function() {
+            const ret = Date.now();
             return ret;
         };
         imports.wbg.__wbg_process_dc0fbacc7c1c06f7 = function(arg0) {

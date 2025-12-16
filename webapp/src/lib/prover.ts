@@ -118,6 +118,7 @@ let paramsLoaded = false;
 // Web Worker for proof generation (to avoid blocking UI)
 let proverWorker: Worker | null = null;
 let workerReady = false;
+let workerInitialized = false; // True only after WASM + params loaded in worker
 let workerMessageId = 0;
 const pendingWorkerMessages: Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
 
@@ -439,14 +440,18 @@ export async function initProver(onProgress?: ProgressCallback): Promise<void> {
         // Also load into worker if available
         if (proverWorker && workerReady) {
           try {
+            console.log('[MASP] Initializing worker WASM...');
             await sendWorkerMessage('init');
+            console.log('[MASP] Worker WASM initialized, loading params...');
             await sendWorkerMessage('loadParams', {
               spendParams: spendBytes,
               outputParams: outputBytes,
             });
-            console.log('[MASP] Worker parameters loaded');
+            workerInitialized = true;
+            console.log('[MASP] Worker fully initialized with parameters');
           } catch (err) {
-            console.warn('[MASP] Failed to load params in worker:', err);
+            console.error('[MASP] Failed to initialize worker, will use main thread:', err);
+            workerInitialized = false;
           }
         }
 
@@ -465,7 +470,7 @@ export async function initProver(onProgress?: ProgressCallback): Promise<void> {
         console.log('[MASP] MASP Info:', JSON.stringify(maspInfo, null, 2));
 
         console.log('[MASP] MASP WASM prover initialized successfully with real Namada parameters');
-        console.log('[MASP] Web Worker available for non-blocking proof generation:', proverWorker !== null && workerReady);
+        console.log('[MASP] Web Worker available for non-blocking proof generation:', workerInitialized);
       } catch (paramError) {
         console.error('[MASP] Failed to load parameters:', paramError);
 
@@ -508,22 +513,27 @@ export async function generateShieldProof(request: ShieldRequest): Promise<Outpu
   }
 
   console.log('[MASP] Generating Output (shield) proof...', request);
+  console.log('[MASP] Worker status: proverWorker=%s, workerReady=%s, workerInitialized=%s',
+    proverWorker !== null, workerReady, workerInitialized);
   const startTime = performance.now();
 
   // Try using worker for non-blocking proof generation
-  if (proverWorker && workerReady) {
+  if (proverWorker && workerInitialized) {
     try {
+      console.log('[MASP] Sending proof generation request to Web Worker...');
       const result = await sendWorkerMessage<OutputProofResult>('generateOutputProof', request);
       const elapsed = performance.now() - startTime;
-      console.log(`[MASP] Shield proof generated via worker in ${(elapsed / 1000).toFixed(2)}s`);
+      console.log(`[MASP] Shield proof generated via Web Worker in ${(elapsed / 1000).toFixed(2)}s`);
       return result;
     } catch (err) {
-      console.warn('[MASP] Worker proof generation failed, falling back to main thread:', err);
+      console.error('[MASP] Worker proof generation failed, falling back to main thread:', err);
     }
+  } else {
+    console.warn('[MASP] Web Worker not available (initialized=%s), using main thread', workerInitialized);
   }
 
   // Fallback to main thread (will block UI)
-  console.warn('[MASP] Generating proof on main thread (may cause UI freeze)');
+  console.warn('[MASP] Generating proof on main thread - UI WILL FREEZE');
   const result = wasmModule.generate_output_proof(request);
   const elapsed = performance.now() - startTime;
   console.log(`[MASP] Shield proof generated on main thread in ${(elapsed / 1000).toFixed(2)}s`);
@@ -539,22 +549,27 @@ export async function generateUnshieldProof(request: UnshieldRequest): Promise<S
   }
 
   console.log('[MASP] Generating Spend (unshield) proof...', request);
+  console.log('[MASP] Worker status: proverWorker=%s, workerReady=%s, workerInitialized=%s',
+    proverWorker !== null, workerReady, workerInitialized);
   const startTime = performance.now();
 
   // Try using worker for non-blocking proof generation
-  if (proverWorker && workerReady) {
+  if (proverWorker && workerInitialized) {
     try {
+      console.log('[MASP] Sending proof generation request to Web Worker...');
       const result = await sendWorkerMessage<SpendProofResult>('generateSpendProof', request);
       const elapsed = performance.now() - startTime;
-      console.log(`[MASP] Spend proof generated via worker in ${(elapsed / 1000).toFixed(2)}s`);
+      console.log(`[MASP] Spend proof generated via Web Worker in ${(elapsed / 1000).toFixed(2)}s`);
       return result;
     } catch (err) {
-      console.warn('[MASP] Worker proof generation failed, falling back to main thread:', err);
+      console.error('[MASP] Worker proof generation failed, falling back to main thread:', err);
     }
+  } else {
+    console.warn('[MASP] Web Worker not available (initialized=%s), using main thread', workerInitialized);
   }
 
   // Fallback to main thread (will block UI)
-  console.warn('[MASP] Generating proof on main thread (may cause UI freeze)');
+  console.warn('[MASP] Generating proof on main thread - UI WILL FREEZE');
   const result = wasmModule.generate_spend_proof(request);
   const elapsed = performance.now() - startTime;
   console.log(`[MASP] Spend proof generated on main thread in ${(elapsed / 1000).toFixed(2)}s`);
