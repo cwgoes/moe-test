@@ -84,15 +84,18 @@ export interface MaspInfo {
   parameter_sizes: { spend: string; output: string };
 }
 
-// Parameter URLs from Namada trusted setup
+// Parameter configuration
+// Local paths are tried first, then remote URLs as fallback
 const MASP_PARAMS = {
   spend: {
-    url: 'https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params',
+    localPath: '/params/masp-spend.params',
+    remoteUrl: 'https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params',
     size: 52_190_167, // ~49.8 MB
     key: 'masp-spend-params',
   },
   output: {
-    url: 'https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params',
+    localPath: '/params/masp-output.params',
+    remoteUrl: 'https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params',
     size: 17_201_979, // ~16.4 MB
     key: 'masp-output-params',
   },
@@ -164,6 +167,23 @@ interface DownloadProgress {
 
 type ProgressCallback = (progress: DownloadProgress) => void;
 
+/**
+ * Try to fetch from a URL with proper error handling
+ */
+async function tryFetch(url: string): Promise<Response | null> {
+  try {
+    const response = await fetch(url, { mode: 'cors' });
+    if (response.ok) {
+      return response;
+    }
+    console.warn(`[MASP] Fetch failed for ${url}: ${response.status} ${response.statusText}`);
+    return null;
+  } catch (e) {
+    console.warn(`[MASP] Fetch error for ${url}:`, e);
+    return null;
+  }
+}
+
 async function downloadParams(
   name: 'spend' | 'output',
   onProgress?: ProgressCallback
@@ -178,11 +198,23 @@ async function downloadParams(
     return cached;
   }
 
-  console.log(`[MASP] Downloading ${name} params from ${config.url}...`);
+  // Try local path first (works when params are in public/params/)
+  console.log(`[MASP] Trying local path: ${config.localPath}`);
+  let response = await tryFetch(config.localPath);
 
-  const response = await fetch(config.url);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${name} params: ${response.statusText}`);
+  // If local fails, try remote (may fail due to CORS)
+  if (!response) {
+    console.log(`[MASP] Local not found, trying remote: ${config.remoteUrl}`);
+    response = await tryFetch(config.remoteUrl);
+  }
+
+  if (!response) {
+    throw new Error(
+      `Failed to download ${name} params. ` +
+      `Please download the file manually from:\n` +
+      `${config.remoteUrl}\n` +
+      `and place it in: public/params/${name === 'spend' ? 'masp-spend.params' : 'masp-output.params'}`
+    );
   }
 
   const reader = response.body?.getReader();
@@ -242,8 +274,6 @@ async function loadWasmModule(): Promise<WasmModule> {
 
   // The wasm-bindgen generated code uses import.meta.url to locate the WASM file.
   // Since we're loading from a blob URL, we need to patch this to use an absolute URL.
-  // Find the line: module_or_path = new URL('masp_wasm_bg.wasm', import.meta.url);
-  // And replace it with an absolute path
   jsCode = jsCode.replace(
     /new URL\(['"]masp_wasm_bg\.wasm['"],\s*import\.meta\.url\)/g,
     `'/wasm/masp_wasm_bg.wasm'`
@@ -259,7 +289,6 @@ async function loadWasmModule(): Promise<WasmModule> {
     return wasm;
   } finally {
     // Clean up the blob URL after import
-    // Note: We delay cleanup slightly to ensure the module is fully loaded
     setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   }
 }
@@ -275,62 +304,80 @@ export async function initProver(onProgress?: ProgressCallback): Promise<void> {
     try {
       console.log('[MASP] Loading WASM module...');
 
-      // Load the WASM module using fetch + blob URL approach
+      // Load the WASM module
       const wasm = await loadWasmModule();
 
       console.log('[MASP] WASM module loaded, initializing...');
 
       // Initialize WASM with the binary file
-      // Pass the absolute path to the WASM binary
       await wasm.default('/wasm/masp_wasm_bg.wasm');
 
       console.log('[MASP] WASM binary loaded, calling init...');
 
-      // Initialize panic hook (this is the #[wasm_bindgen(start)] function,
-      // but it may already be called automatically)
+      // Initialize panic hook
       try {
         wasm.init();
       } catch {
-        // init() might throw if already called via wasm_bindgen(start)
         console.log('[MASP] init() already called');
       }
 
       wasmModule = wasm;
 
-      // Download and load MASP parameters
+      // Try to download and load MASP parameters
       console.log('[MASP] Downloading trusted setup parameters...');
+      console.log('[MASP] Note: Parameters are ~66MB total. First load may take a while.');
 
-      // Download both parameters (can be done in parallel)
-      const [spendParams, outputParams] = await Promise.all([
-        downloadParams('spend', onProgress),
-        downloadParams('output', onProgress),
-      ]);
+      try {
+        // Download both parameters
+        const [spendParams, outputParams] = await Promise.all([
+          downloadParams('spend', onProgress),
+          downloadParams('output', onProgress),
+        ]);
 
-      console.log('[MASP] Loading parameters into prover...');
+        console.log('[MASP] Loading parameters into prover...');
 
-      // Convert ArrayBuffer to Uint8Array for WASM
-      const spendBytes = new Uint8Array(spendParams);
-      const outputBytes = new Uint8Array(outputParams);
+        // Convert to Uint8Array for WASM
+        const spendBytes = new Uint8Array(spendParams);
+        const outputBytes = new Uint8Array(outputParams);
 
-      // Load parameters into the WASM prover
-      const loadResult = wasm.load_masp_parameters(spendBytes, outputBytes);
-      console.log('[MASP] Parameters load result:', JSON.stringify(loadResult));
+        // Load parameters into the WASM prover
+        const loadResult = wasm.load_masp_parameters(spendBytes, outputBytes);
+        console.log('[MASP] Parameters load result:', JSON.stringify(loadResult));
 
-      paramsLoaded = true;
+        paramsLoaded = true;
 
-      // Verify the prover is ready
-      const isInit = wasm.is_initialized();
-      console.log('[MASP] Prover initialized:', isInit);
+        // Verify the prover is ready
+        const isInit = wasm.is_initialized();
+        console.log('[MASP] Prover initialized:', isInit);
 
-      if (!isInit) {
-        throw new Error('MASP prover failed to initialize after loading parameters');
+        if (!isInit) {
+          throw new Error('MASP prover failed to initialize after loading parameters');
+        }
+
+        // Get MASP info for logging
+        const maspInfo = wasm.get_masp_info() as MaspInfo;
+        console.log('[MASP] MASP Info:', JSON.stringify(maspInfo, null, 2));
+
+        console.log('[MASP] MASP WASM prover initialized successfully with real Namada parameters');
+      } catch (paramError) {
+        console.error('[MASP] Failed to load parameters:', paramError);
+
+        // Provide helpful error message
+        const errorMessage = paramError instanceof Error ? paramError.message : String(paramError);
+
+        if (errorMessage.includes('NetworkError') || errorMessage.includes('CORS') || errorMessage.includes('Failed to download')) {
+          throw new Error(
+            'Failed to load MASP parameters. GitHub does not allow CORS requests.\n\n' +
+            'To fix this, download the parameter files manually:\n' +
+            '1. Download: https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-spend.params\n' +
+            '2. Download: https://github.com/anoma/masp-mpc/releases/download/namada-trusted-setup/masp-output.params\n' +
+            '3. Place them in: webapp/public/params/\n' +
+            '4. Refresh the page'
+          );
+        }
+
+        throw paramError;
       }
-
-      // Get MASP info for logging
-      const maspInfo = wasm.get_masp_info() as MaspInfo;
-      console.log('[MASP] MASP Info:', JSON.stringify(maspInfo, null, 2));
-
-      console.log('[MASP] MASP WASM prover initialized successfully with real Namada parameters');
     } catch (error) {
       console.error('[MASP] Prover initialization error:', error);
       initPromise = null;
