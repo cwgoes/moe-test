@@ -1,20 +1,21 @@
 #!/bin/bash
-# Build MASP WASM module with optimizations
+# Build MASP WASM module for both main thread and Web Worker
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../webapp/public/wasm"
+WORKER_OUT_DIR="$SCRIPT_DIR/../webapp/public/wasm-worker"
 
-# Note: wasm-opt is disabled by default because it can cause "failed to grow table"
-# errors at runtime with certain optimization levels. The Rust-level optimizations
-# (opt-level=3, lto=fat) already provide good performance.
-USE_WASM_OPT=${USE_WASM_OPT:-false}
+echo "=========================================="
+echo "Building MASP WASM modules"
+echo "=========================================="
 
-echo "[1/2] Building WASM with wasm-pack..."
+echo ""
+echo "[1/3] Building WASM for main thread (--target web)..."
 wasm-pack build --target web --out-dir "$OUT_DIR"
 
 # Restore .gitignore that wasm-pack overwrites
-cat > "$OUT_DIR/.gitignore" << 'EOF'
+cat > "$OUT_DIR/.gitignore" << 'GITIGNORE'
 # Ignore wasm-pack generated files except what we need
 *
 !.gitignore
@@ -23,32 +24,35 @@ cat > "$OUT_DIR/.gitignore" << 'EOF'
 !masp_wasm_bg.wasm
 !masp_wasm_bg.wasm.d.ts
 !prover-worker.js
-EOF
-
-if [ "$USE_WASM_OPT" = "true" ]; then
-    echo "[2/2] Optimizing WASM with wasm-opt..."
-    if command -v wasm-opt &> /dev/null; then
-        WASM_FILE="$OUT_DIR/masp_wasm_bg.wasm"
-        ORIGINAL_SIZE=$(stat -f%z "$WASM_FILE" 2>/dev/null || stat -c%s "$WASM_FILE")
-
-        # Use conservative -O2 optimization (not -O3 which can cause issues)
-        wasm-opt -O2 "$WASM_FILE" -o "$WASM_FILE.opt"
-        mv "$WASM_FILE.opt" "$WASM_FILE"
-
-        OPTIMIZED_SIZE=$(stat -f%z "$WASM_FILE" 2>/dev/null || stat -c%s "$WASM_FILE")
-        echo "   Original: $(echo "scale=1; $ORIGINAL_SIZE/1024" | bc)KB"
-        echo "   Optimized: $(echo "scale=1; $OPTIMIZED_SIZE/1024" | bc)KB"
-        echo "   Saved: $(echo "scale=1; ($ORIGINAL_SIZE-$OPTIMIZED_SIZE)/1024" | bc)KB"
-    else
-        echo "   wasm-opt not found, skipping optimization"
-        echo "   Install with: apt-get install binaryen"
-    fi
-else
-    echo "[2/2] Skipping wasm-opt (disabled by default)"
-    echo "   To enable: USE_WASM_OPT=true ./build.sh"
-fi
+GITIGNORE
 
 echo ""
-echo "Done! Output: $OUT_DIR"
-FINAL_SIZE=$(stat -f%z "$OUT_DIR/masp_wasm_bg.wasm" 2>/dev/null || stat -c%s "$OUT_DIR/masp_wasm_bg.wasm")
-echo "WASM size: $(echo "scale=1; $FINAL_SIZE/1024" | bc)KB"
+echo "[2/3] Building WASM for Web Worker (--target no-modules)..."
+wasm-pack build --target no-modules --out-dir "$WORKER_OUT_DIR"
+
+# Restore .gitignore for worker directory
+cat > "$WORKER_OUT_DIR/.gitignore" << 'GITIGNORE'
+# Ignore wasm-pack generated files except what we need
+*
+!.gitignore
+!masp_wasm.js
+!masp_wasm_bg.wasm
+GITIGNORE
+
+echo ""
+echo "[3/3] Build complete!"
+echo ""
+echo "Output directories:"
+echo "  Main thread: $OUT_DIR"
+echo "  Web Worker:  $WORKER_OUT_DIR"
+echo ""
+
+MAIN_SIZE=$(stat -f%z "$OUT_DIR/masp_wasm_bg.wasm" 2>/dev/null || stat -c%s "$OUT_DIR/masp_wasm_bg.wasm")
+WORKER_SIZE=$(stat -f%z "$WORKER_OUT_DIR/masp_wasm_bg.wasm" 2>/dev/null || stat -c%s "$WORKER_OUT_DIR/masp_wasm_bg.wasm")
+
+echo "WASM sizes:"
+echo "  Main thread: $(echo "scale=1; $MAIN_SIZE/1024" | bc)KB"
+echo "  Web Worker:  $(echo "scale=1; $WORKER_SIZE/1024" | bc)KB"
+echo ""
+echo "The Web Worker runs proof generation in a background thread,"
+echo "keeping the UI responsive during the ~30 second proof computation."

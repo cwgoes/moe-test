@@ -4,20 +4,23 @@
  * This worker runs proof generation in a background thread to avoid
  * blocking the main UI thread during the computationally intensive
  * Groth16 proof generation process.
+ *
+ * Uses wasm-bindgen's no-modules target for importScripts() compatibility.
  */
 
 let wasmModule = null;
 let paramsLoaded = false;
 
-// Import the WASM module
-importScripts('./masp_wasm.js');
+// Import the WASM module (no-modules build creates global wasm_bindgen)
+importScripts('/wasm-worker/masp_wasm.js');
 
 // Initialize the WASM module
 async function initWasm() {
   if (wasmModule) return true;
 
   try {
-    const wasm = await wasm_bindgen('./masp_wasm_bg.wasm');
+    // wasm_bindgen is now a global function after importScripts
+    await wasm_bindgen('/wasm-worker/masp_wasm_bg.wasm');
     wasmModule = wasm_bindgen;
     console.log('[Worker] WASM module initialized');
     return true;
@@ -123,7 +126,7 @@ self.onmessage = async function(e) {
         break;
 
       case 'isInitialized':
-        result = wasmModule && paramsLoaded;
+        result = wasmModule !== null && paramsLoaded;
         break;
 
       default:
