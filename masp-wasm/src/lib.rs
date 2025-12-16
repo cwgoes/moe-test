@@ -553,25 +553,26 @@ fn g2_to_eip2537(point: &bls12_381::G2Affine) -> Vec<u8> {
     let uncompressed = point.to_uncompressed();
     // bls12_381 to_uncompressed: 192 bytes
     // Format: x.c1 (48) || x.c0 (48) || y.c1 (48) || y.c0 (48)
-    // EIP-2537 expects: x.c0 (64) || x.c1 (64) || y.c0 (64) || y.c1 (64)
+    // EIP-2537 uses same Zcash format: c1 (imaginary) || c0 (real) for each Fp2
+    // We just need to add 16-byte zero padding to each 48-byte component
     let x_c1 = &uncompressed[0..48];
     let x_c0 = &uncompressed[48..96];
     let y_c1 = &uncompressed[96..144];
     let y_c0 = &uncompressed[144..192];
 
     let mut result = Vec::with_capacity(256);
-    // x.c0 padded to 64 bytes
-    result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(x_c0);
-    // x.c1 padded to 64 bytes
+    // x.c1 (imaginary) padded to 64 bytes
     result.extend_from_slice(&[0u8; 16]);
     result.extend_from_slice(x_c1);
-    // y.c0 padded to 64 bytes
+    // x.c0 (real) padded to 64 bytes
     result.extend_from_slice(&[0u8; 16]);
-    result.extend_from_slice(y_c0);
-    // y.c1 padded to 64 bytes
+    result.extend_from_slice(x_c0);
+    // y.c1 (imaginary) padded to 64 bytes
     result.extend_from_slice(&[0u8; 16]);
     result.extend_from_slice(y_c1);
+    // y.c0 (real) padded to 64 bytes
+    result.extend_from_slice(&[0u8; 16]);
+    result.extend_from_slice(y_c0);
 
     result
 }
