@@ -19,3 +19,6 @@ docs/
 
 # Dotenv file
 .env
+
+# MASP parameter files (large binaries, download separately)
+webapp/public/params/*.params
